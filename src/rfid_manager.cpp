@@ -17,9 +17,9 @@ static volatile bool enrollmentDone = false;
 static char enrollmentUid[24] = {};
 static SemaphoreHandle_t enrollMutex = nullptr;
 
-// Reader health counters
-static volatile bool entranceHealthy = true;
-static volatile bool insideHealthy = true;
+// Reader health counters (rfid task writes, other tasks read)
+static bool entranceHealthy = true;
+static bool insideHealthy = true;
 static uint8_t entranceFailCount = 0;
 static uint8_t insideFailCount = 0;
 static uint32_t lastEntranceReinit = 0;
