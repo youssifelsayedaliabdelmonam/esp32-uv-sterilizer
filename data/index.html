@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UV Sterilizer Admin</title>
+<style>
+:root {
+  --bg: #0f172a;
+  --card: #1e293b;
+  --accent: #38bdf8;
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --danger: #f87171;
+  --ok: #4ade80;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  padding: 1rem;
+  max-width: 900px;
+  margin: 0 auto;
+}
+h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+.subtitle { color: var(--muted); margin-bottom: 1.5rem; font-size: 0.9rem; }
+.card {
+  background: var(--card);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+  border: 1px solid #334155;
+}
+.card h2 { font-size: 1.1rem; margin-bottom: 0.75rem; color: var(--accent); }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.5rem; }
+.stat { background: #0f172a; padding: 0.5rem 0.75rem; border-radius: 6px; }
+.stat label { display: block; font-size: 0.75rem; color: var(--muted); }
+.stat span { font-weight: 600; font-size: 1rem; }
+table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid #334155; font-size: 0.9rem; }
+th { color: var(--muted); font-weight: 500; }
+button, .btn {
+  background: var(--accent);
+  color: #0f172a;
+  border: none;
+  padding: 0.45rem 0.9rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+button:hover { filter: brightness(1.1); }
+button.danger { background: var(--danger); color: #fff; }
+button.secondary { background: #475569; color: #fff; }
+.row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.5rem; }
+input[type="text"], input[type="number"] {
+  background: #0f172a;
+  border: 1px solid #475569;
+  color: var(--text);
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+.msg { margin-top: 0.5rem; font-size: 0.85rem; min-height: 1.2em; }
+.msg.ok { color: var(--ok); }
+.msg.err { color: var(--danger); }
+.badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+.badge.on { background: #166534; color: var(--ok); }
+.badge.off { background: #7f1d1d; color: var(--danger); }
+</style>
+</head>
+<body>
+<h1>UV Sterilizer Admin</h1>
+<p class="subtitle">Manage users, products, and UV cycle settings</p>
+
+<div class="card" id="statusCard">
+  <h2>System Status</h2>
+  <div class="grid" id="statusGrid">
+    <div class="stat"><label>State</label><span id="st_state">--</span></div>
+    <div class="stat"><label>UV Remaining</label><span id="st_uv">--</span></div>
+    <div class="stat"><label>Entrance</label><span id="st_ent">--</span></div>
+    <div class="stat"><label>Exit</label><span id="st_exit">--</span></div>
+    <div class="stat"><label>UV Lamp</label><span id="st_lamp">--</span></div>
+    <div class="stat"><label>RFID</label><span id="st_rfid">--</span></div>
+  </div>
+  <p class="msg" id="statusMsg"></p>
+</div>
+
+<div class="card">
+  <h2>UV Duration</h2>
+  <div class="row">
+    <input type="number" id="uvDuration" min="5" max="600" value="30"> seconds
+    <button onclick="saveSettings()">Save</button>
+  </div>
+  <p class="msg" id="settingsMsg"></p>
+</div>
+
+<div class="card">
+  <h2>User Tags <small style="color:var(--muted)">(max 5)</small></h2>
+  <table>
+    <thead><tr><th>UID</th><th>Name</th><th></th></tr></thead>
+    <tbody id="usersTable"></tbody>
+  </table>
+  <div class="row" style="margin-top:0.75rem">
+    <input type="text" id="userName" placeholder="Name (optional)">
+    <button onclick="scanUser()">Scan Tag</button>
+    <button class="secondary" onclick="loadUsers()">Refresh</button>
+  </div>
+  <p class="msg" id="userMsg"></p>
+</div>
+
+<div class="card">
+  <h2>Product Tags</h2>
+  <table>
+    <thead><tr><th>UID</th><th></th></tr></thead>
+    <tbody id="productsTable"></tbody>
+  </table>
+  <div class="row" style="margin-top:0.75rem">
+    <button onclick="scanProduct()">Scan Tag</button>
+    <button class="secondary" onclick="loadProducts()">Refresh</button>
+  </div>
+  <p class="msg" id="productMsg"></p>
+</div>
+
+<script>
+const api = (path, opts = {}) => fetch(path, opts).then(async r => {
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { error: text }; }
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+});
+
+function setMsg(id, text, ok) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+}
+
+async function refreshStatus() {
+  try {
+    const s = await api('/api/status');
+    document.getElementById('st_state').textContent = s.state;
+    document.getElementById('st_uv').textContent = s.uv_time_remaining + 's';
+    document.getElementById('st_ent').innerHTML = s.entrance_locked
+      ? '<span class="badge off">Locked</span>' : '<span class="badge on">Open</span>';
+    document.getElementById('st_exit').innerHTML = s.exit_locked
+      ? '<span class="badge off">Locked</span>' : '<span class="badge on">Open</span>';
+    document.getElementById('st_lamp').innerHTML = s.uv_lamp_on
+      ? '<span class="badge on">ON</span>' : '<span class="badge off">OFF</span>';
+    const rfidOk = s.entrance_rfid_ok && s.inside_rfid_ok;
+    document.getElementById('st_rfid').innerHTML = rfidOk
+      ? '<span class="badge on">OK</span>' : '<span class="badge off">Error</span>';
+    document.getElementById('uvDuration').value = s.uv_duration_sec;
+  } catch (e) {
+    setMsg('statusMsg', e.message, false);
+  }
+}
+
+async function loadUsers() {
+  try {
+    const data = await api('/api/users');
+    const tbody = document.getElementById('usersTable');
+    tbody.innerHTML = '';
+    (data.users || []).forEach(u => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${u.uid}</td><td>${u.name || ''}</td>
+        <td><button class="danger" onclick="deleteUser('${u.uid}')">Delete</button></td>`;
+      tbody.appendChild(tr);
+    });
+    setMsg('userMsg', (data.users || []).length + ' user(s)', true);
+  } catch (e) {
+    setMsg('userMsg', e.message, false);
+  }
+}
+
+async function loadProducts() {
+  try {
+    const data = await api('/api/products');
+    const tbody = document.getElementById('productsTable');
+    tbody.innerHTML = '';
+    (data.products || []).forEach(p => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${p.uid}</td>
+        <td><button class="danger" onclick="deleteProduct('${p.uid}')">Delete</button></td>`;
+      tbody.appendChild(tr);
+    });
+    setMsg('productMsg', (data.products || []).length + ' product(s)', true);
+  } catch (e) {
+    setMsg('productMsg', e.message, false);
+  }
+}
+
+async function scanUser() {
+  setMsg('userMsg', 'Hold tag near ENTRANCE reader (15s timeout)...', true);
+  try {
+    const data = await api('/api/scan_tag?type=user');
+    const name = document.getElementById('userName').value.trim();
+    await api('/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uid: data.uid, name: name })
+    });
+    document.getElementById('userName').value = '';
+    setMsg('userMsg', 'User added: ' + data.uid, true);
+    loadUsers();
+  } catch (e) {
+    setMsg('userMsg', e.message, false);
+  }
+}
+
+async function scanProduct() {
+  setMsg('productMsg', 'Hold tag near ENTRANCE reader (15s timeout)...', true);
+  try {
+    const data = await api('/api/scan_tag?type=product');
+    await api('/api/products', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uid: data.uid })
+    });
+    setMsg('productMsg', 'Product added: ' + data.uid, true);
+    loadProducts();
+  } catch (e) {
+    setMsg('productMsg', e.message, false);
+  }
+}
+
+async function deleteUser(uid) {
+  if (!confirm('Delete user ' + uid + '?')) return;
+  try {
+    await api('/api/users?uid=' + encodeURIComponent(uid), { method: 'DELETE' });
+    loadUsers();
+  } catch (e) {
+    setMsg('userMsg', e.message, false);
+  }
+}
+
+async function deleteProduct(uid) {
+  if (!confirm('Delete product ' + uid + '?')) return;
+  try {
+    await api('/api/products?uid=' + encodeURIComponent(uid), { method: 'DELETE' });
+    loadProducts();
+  } catch (e) {
+    setMsg('productMsg', e.message, false);
+  }
+}
+
+async function saveSettings() {
+  const dur = parseInt(document.getElementById('uvDuration').value, 10);
+  try {
+    await api('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uv_duration: dur })
+    });
+    setMsg('settingsMsg', 'UV duration saved: ' + dur + 's', true);
+  } catch (e) {
+    setMsg('settingsMsg', e.message, false);
+  }
+}
+
+refreshStatus();
+loadUsers();
+loadProducts();
+setInterval(refreshStatus, 2000);
+</script>
+</body>
+</html>
