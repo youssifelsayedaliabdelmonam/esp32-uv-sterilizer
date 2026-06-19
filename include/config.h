@@ -89,10 +89,19 @@
 // SPIFFS file paths
 #define USERS_JSON_PATH         "/users.json"
 #define PRODUCTS_JSON_PATH      "/products.json"
+#define LOGS_JSON_PATH          "/logs.json"
+
+// Cycle log rolling buffer size
+#define MAX_LOG_ENTRIES         100
+#define LOG_JSON_DOC_SIZE       12288   // SPIFFS log read/write buffer (100 entries)
+
+// Storage mutex timeout
+#define STORAGE_MUTEX_TIMEOUT_MS  200
 
 // NVS namespace / keys
 #define NVS_NAMESPACE           "uvsteril"
 #define NVS_KEY_UV_DURATION     "uv_duration"
+#define NVS_KEY_LAST_TIME       "last_time"   // optional: restore clock after reboot
 
 // -----------------------------------------------------------------------------
 // FreeRTOS Task Configuration
@@ -118,6 +127,7 @@
 #define QUEUE_TAG_EVENTS        8
 #define QUEUE_BUZZER            8
 #define QUEUE_WEB_CMD           4
+#define QUEUE_LOG_EVENTS        4
 
 // Web server
 #define WEB_SERVER_PORT         80

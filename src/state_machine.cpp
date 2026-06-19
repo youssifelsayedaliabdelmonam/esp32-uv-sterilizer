@@ -10,7 +10,15 @@ static SemaphoreHandle_t statusMutex = nullptr;
 static uint32_t stateEnterMs = 0;
 static uint32_t uvEndMs = 0;
 
-// Relay helpers – active HIGH
+static bool lockStatus(TickType_t timeout = pdMS_TO_TICKS(50)) {
+    return statusMutex && xSemaphoreTake(statusMutex, timeout) == pdTRUE;
+}
+
+static void unlockStatus() {
+    if (statusMutex) xSemaphoreGive(statusMutex);
+}
+
+// Relay helpers – active HIGH (caller must hold statusMutex when updating currentStatus)
 static void setEntranceLock(bool locked) {
     digitalWrite(PIN_ENTRANCE_LOCK, locked ? LOCK_ACTIVE : LOCK_INACTIVE);
     currentStatus.entranceLocked = locked;
@@ -37,14 +45,16 @@ static void unlockBothDoors() {
 }
 
 static void publishStatus() {
+    SystemStatus snapshot;
+    if (!lockStatus()) return;
     currentStatus.entranceRfidOk = rfidEntranceHealthy();
     currentStatus.insideRfidOk = rfidInsideHealthy();
-    if (statusMutex && xSemaphoreTake(statusMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        lcdUpdateSharedStatus(currentStatus);
-        xSemaphoreGive(statusMutex);
-    }
+    snapshot = currentStatus;
+    unlockStatus();
+    lcdUpdateSharedStatus(snapshot);
 }
 
+// Caller must hold statusMutex
 static void transitionTo(SystemState newState) {
     currentStatus.state = newState;
     stateEnterMs = millis();
@@ -85,18 +95,18 @@ static void transitionTo(SystemState newState) {
             setUvLamp(false);
             currentStatus.stateTimeoutRemainingMs = EXIT_TIMEOUT_MS;
             buzzerRequest(BEEP_DOUBLE_SHORT);
+            storage.queueCycleLog(currentStatus.lastUserUid, currentStatus.lastProductUid);
             break;
     }
-    publishStatus();
 }
 
+// Caller must hold statusMutex
 static void handleTagEvent(const TagEvent& evt) {
-    SystemState state = currentStatus.state;
-
-  switch (state) {
+    switch (currentStatus.state) {
         case STATE_IDLE:
             if (evt.source == TAG_SOURCE_ENTRANCE && evt.isUser) {
                 strncpy(currentStatus.lastUserUid, evt.uid, sizeof(currentStatus.lastUserUid) - 1);
+                currentStatus.lastUserUid[sizeof(currentStatus.lastUserUid) - 1] = '\0';
                 transitionTo(STATE_DOOR_ENTRY);
             } else if (evt.source == TAG_SOURCE_ENTRANCE) {
                 buzzerRequest(BEEP_ERROR);
@@ -105,14 +115,12 @@ static void handleTagEvent(const TagEvent& evt) {
 
         case STATE_DOOR_ENTRY:
             if (evt.source == TAG_SOURCE_ENTRANCE && evt.isUser) {
-                // Re-auth extends entry window
                 strncpy(currentStatus.lastUserUid, evt.uid, sizeof(currentStatus.lastUserUid) - 1);
+                currentStatus.lastUserUid[sizeof(currentStatus.lastUserUid) - 1] = '\0';
                 stateEnterMs = millis();
                 currentStatus.stateTimeoutRemainingMs = ENTRY_TIMEOUT_MS;
                 buzzerRequest(BEEP_SINGLE_SHORT);
-                publishStatus();
             } else if (evt.source == TAG_SOURCE_INSIDE && evt.isProduct) {
-                // Ignore product scans while entrance is unlocked
                 Serial.println("[State] Product scan ignored during DOOR_ENTRY");
             } else {
                 buzzerRequest(BEEP_ERROR);
@@ -122,6 +130,7 @@ static void handleTagEvent(const TagEvent& evt) {
         case STATE_WAITING_FOR_PRODUCT:
             if (evt.source == TAG_SOURCE_INSIDE && evt.isProduct) {
                 strncpy(currentStatus.lastProductUid, evt.uid, sizeof(currentStatus.lastProductUid) - 1);
+                currentStatus.lastProductUid[sizeof(currentStatus.lastProductUid) - 1] = '\0';
                 transitionTo(STATE_UV_ACTIVE);
             } else if (evt.source == TAG_SOURCE_INSIDE) {
                 buzzerRequest(BEEP_ERROR);
@@ -129,15 +138,12 @@ static void handleTagEvent(const TagEvent& evt) {
             break;
 
         case STATE_UV_ACTIVE:
-            // Ignore all tags during UV
-            break;
-
         case STATE_UV_DONE:
-            // Entrance reader ignored; no tag handling
             break;
     }
 }
 
+// Caller must hold statusMutex
 static void updateTimeouts() {
     uint32_t now = millis();
 
@@ -177,12 +183,20 @@ static void stateMachineTask(void* param) {
     TagEvent evt;
 
     for (;;) {
-        // Non-blocking tag processing
         while (tagQueue && xQueueReceive(tagQueue, &evt, 0) == pdTRUE) {
-            handleTagEvent(evt);
+            if (lockStatus(portMAX_DELAY)) {
+                handleTagEvent(evt);
+                unlockStatus();
+                publishStatus();
+            }
         }
 
-        updateTimeouts();
+        if (lockStatus(portMAX_DELAY)) {
+            updateTimeouts();
+            unlockStatus();
+        }
+
+        storage.processLogQueue();
         publishStatus();
 
         vTaskDelay(pdMS_TO_TICKS(50));
@@ -201,7 +215,7 @@ void stateMachineInit() {
     currentStatus.entranceLocked = true;
     currentStatus.exitLocked = true;
     currentStatus.uvLampOn = false;
-    strncpy(currentStatus.apIp, "", sizeof(currentStatus.apIp));
+    currentStatus.apIp[0] = '\0';
 
     lockBothDoors();
     setUvLamp(false);
@@ -219,31 +233,37 @@ void stateMachineStartTask() {
 }
 
 SystemState stateMachineGetState() {
+    if (lockStatus(pdMS_TO_TICKS(20))) {
+        SystemState s = currentStatus.state;
+        unlockStatus();
+        return s;
+    }
     return currentStatus.state;
 }
 
 void stateMachineGetStatus(SystemStatus& out) {
-    if (statusMutex && xSemaphoreTake(statusMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    if (lockStatus(pdMS_TO_TICKS(100))) {
         out = currentStatus;
-        xSemaphoreGive(statusMutex);
+        unlockStatus();
     } else {
         out = currentStatus;
     }
 }
 
 bool stateMachineIsWebServerAllowed() {
-    // Web server can run in any state; UV cycle continues independently
     return true;
 }
 
-// Allow web server to update AP info in shared status
 void stateMachineSetWebInfo(bool active, const char* ip) {
-    currentStatus.webServerActive = active;
-    if (ip) {
-        strncpy(currentStatus.apIp, ip, sizeof(currentStatus.apIp) - 1);
-        currentStatus.apIp[sizeof(currentStatus.apIp) - 1] = '\0';
-    } else {
-        currentStatus.apIp[0] = '\0';
+    if (lockStatus(pdMS_TO_TICKS(100))) {
+        currentStatus.webServerActive = active;
+        if (ip) {
+            strncpy(currentStatus.apIp, ip, sizeof(currentStatus.apIp) - 1);
+            currentStatus.apIp[sizeof(currentStatus.apIp) - 1] = '\0';
+        } else {
+            currentStatus.apIp[0] = '\0';
+        }
+        unlockStatus();
     }
     publishStatus();
 }

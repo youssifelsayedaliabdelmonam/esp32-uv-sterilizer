@@ -13,6 +13,7 @@
   --muted: #94a3b8;
   --danger: #f87171;
   --ok: #4ade80;
+  --warn: #fbbf24;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -54,8 +55,9 @@ button, .btn {
 button:hover { filter: brightness(1.1); }
 button.danger { background: var(--danger); color: #fff; }
 button.secondary { background: #475569; color: #fff; }
+button.warn { background: var(--warn); color: #0f172a; }
 .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.5rem; }
-input[type="text"], input[type="number"] {
+input[type="text"], input[type="number"], input[type="datetime-local"] {
   background: #0f172a;
   border: 1px solid #475569;
   color: var(--text);
@@ -66,14 +68,37 @@ input[type="text"], input[type="number"] {
 .msg { margin-top: 0.5rem; font-size: 0.85rem; min-height: 1.2em; }
 .msg.ok { color: var(--ok); }
 .msg.err { color: var(--danger); }
+.msg.warn { color: var(--warn); }
 .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
 .badge.on { background: #166534; color: var(--ok); }
 .badge.off { background: #7f1d1d; color: var(--danger); }
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+  background: var(--card);
+  border: 1px solid #475569;
+  border-radius: 10px;
+  padding: 1.25rem;
+  max-width: 400px;
+  width: 90%;
+}
+.modal h3 { margin-bottom: 0.5rem; color: var(--warn); }
+.modal p { margin-bottom: 1rem; font-size: 0.9rem; }
+.modal .row { justify-content: flex-end; }
+.log-empty { color: var(--muted); font-size: 0.9rem; padding: 0.5rem 0; }
 </style>
 </head>
 <body>
 <h1>UV Sterilizer Admin</h1>
-<p class="subtitle">Manage users, products, and UV cycle settings</p>
+<p class="subtitle">Manage users, products, UV settings, logs, and clock</p>
 
 <div class="card" id="statusCard">
   <h2>System Status</h2>
@@ -89,12 +114,38 @@ input[type="text"], input[type="number"] {
 </div>
 
 <div class="card">
+  <h2>Date &amp; Time</h2>
+  <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem">
+    Set the system clock for accurate log timestamps. Restored from NVS after reboot if previously set.
+  </p>
+  <div class="row">
+    <span id="currentTime">--</span>
+    <input type="datetime-local" id="datetimeInput">
+    <button onclick="setTime()">Set Time</button>
+    <button class="secondary" onclick="loadTime()">Refresh</button>
+  </div>
+  <p class="msg" id="timeMsg"></p>
+</div>
+
+<div class="card">
   <h2>UV Duration</h2>
   <div class="row">
     <input type="number" id="uvDuration" min="5" max="600" value="30"> seconds
     <button onclick="saveSettings()">Save</button>
   </div>
   <p class="msg" id="settingsMsg"></p>
+</div>
+
+<div class="card">
+  <h2>Sterilization Log</h2>
+  <table>
+    <thead><tr><th>Timestamp</th><th>User UID</th><th>Product UID</th></tr></thead>
+    <tbody id="logsTable"></tbody>
+  </table>
+  <div class="row" style="margin-top:0.75rem">
+    <button class="secondary" onclick="loadLogs()">Refresh</button>
+  </div>
+  <p class="msg" id="logsMsg"></p>
 </div>
 
 <div class="card">
@@ -124,12 +175,30 @@ input[type="text"], input[type="number"] {
   <p class="msg" id="productMsg"></p>
 </div>
 
+<div class="modal-overlay" id="conflictModal">
+  <div class="modal">
+    <h3>Tag Conflict</h3>
+    <p id="conflictMessage"></p>
+    <div class="row">
+      <button class="secondary" onclick="cancelConflict()">Cancel</button>
+      <button class="warn" onclick="confirmConflict()">Reassign</button>
+    </div>
+  </div>
+</div>
+
 <script>
+let pendingConflict = null;
+
 const api = (path, opts = {}) => fetch(path, opts).then(async r => {
   const text = await r.text();
   let data;
   try { data = JSON.parse(text); } catch { data = { error: text }; }
-  if (!r.ok) throw new Error(data.error || r.statusText);
+  if (!r.ok) {
+    const err = new Error(data.message || data.error || r.statusText);
+    err.data = data;
+    err.status = r.status;
+    throw err;
+  }
   return data;
 });
 
@@ -156,6 +225,64 @@ async function refreshStatus() {
     document.getElementById('uvDuration').value = s.uv_duration_sec;
   } catch (e) {
     setMsg('statusMsg', e.message, false);
+  }
+}
+
+async function loadTime() {
+  try {
+    const t = await api('/api/time');
+    document.getElementById('currentTime').textContent = t.set
+      ? t.formatted : '(not set)';
+    if (t.set) {
+      const d = new Date(t.timestamp * 1000);
+      const pad = n => String(n).padStart(2, '0');
+      const local = d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate())
+        + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+      document.getElementById('datetimeInput').value = local;
+    }
+  } catch (e) {
+    setMsg('timeMsg', e.message, false);
+  }
+}
+
+async function setTime() {
+  const val = document.getElementById('datetimeInput').value;
+  if (!val) {
+    setMsg('timeMsg', 'Select date and time first', false);
+    return;
+  }
+  const ts = Math.floor(new Date(val).getTime() / 1000);
+  try {
+    const r = await api('/api/time', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timestamp: ts })
+    });
+    document.getElementById('currentTime').textContent = r.formatted;
+    setMsg('timeMsg', 'Time set: ' + r.formatted, true);
+  } catch (e) {
+    setMsg('timeMsg', e.message, false);
+  }
+}
+
+async function loadLogs() {
+  try {
+    const data = await api('/api/logs');
+    const tbody = document.getElementById('logsTable');
+    tbody.innerHTML = '';
+    const logs = data.logs || [];
+    if (logs.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" class="log-empty">No cycles logged yet</td></tr>';
+    } else {
+      logs.forEach(l => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${l.timestamp}</td><td>${l.user_uid}</td><td>${l.product_uid}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
+    setMsg('logsMsg', logs.length + ' log entries', true);
+  } catch (e) {
+    setMsg('logsMsg', e.message, false);
   }
 }
 
@@ -193,10 +320,62 @@ async function loadProducts() {
   }
 }
 
-async function scanUser() {
-  setMsg('userMsg', 'Hold tag near ENTRANCE reader (15s timeout)...', true);
+function showConflict(message, uid, type, name) {
+  pendingConflict = { uid, type, name };
+  document.getElementById('conflictMessage').textContent = message + ' (UID: ' + uid + ')';
+  document.getElementById('conflictModal').classList.add('show');
+}
+
+function cancelConflict() {
+  pendingConflict = null;
+  document.getElementById('conflictModal').classList.remove('show');
+}
+
+async function confirmConflict() {
+  if (!pendingConflict) return;
+  const { uid, type, name } = pendingConflict;
+  cancelConflict();
   try {
-    const data = await api('/api/scan_tag?type=user');
+    await api('/api/reassign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uid, type, name: name || '' })
+    });
+    if (type === 'user') {
+      setMsg('userMsg', 'Tag reassigned as user: ' + uid, true);
+      loadUsers();
+      loadProducts();
+    } else {
+      setMsg('productMsg', 'Tag reassigned as product: ' + uid, true);
+      loadProducts();
+      loadUsers();
+    }
+  } catch (e) {
+    const msgId = type === 'user' ? 'userMsg' : 'productMsg';
+    setMsg(msgId, e.message, false);
+  }
+}
+
+async function scanTag(type) {
+  const msgId = type === 'user' ? 'userMsg' : 'productMsg';
+  setMsg(msgId, 'Hold tag near ENTRANCE reader (15s timeout)...', true);
+  try {
+    const data = await api('/api/scan_tag?type=' + type);
+    return data;
+  } catch (e) {
+    if (e.data && e.data.error === 'conflict') {
+      const name = type === 'user' ? document.getElementById('userName').value.trim() : '';
+      showConflict(e.data.message, e.data.uid, type, name);
+      throw e;
+    }
+    setMsg(msgId, e.message, false);
+    throw e;
+  }
+}
+
+async function scanUser() {
+  try {
+    const data = await scanTag('user');
     const name = document.getElementById('userName').value.trim();
     await api('/api/users', {
       method: 'POST',
@@ -207,14 +386,13 @@ async function scanUser() {
     setMsg('userMsg', 'User added: ' + data.uid, true);
     loadUsers();
   } catch (e) {
-    setMsg('userMsg', e.message, false);
+    if (e.data && e.data.error === 'conflict') return;
   }
 }
 
 async function scanProduct() {
-  setMsg('productMsg', 'Hold tag near ENTRANCE reader (15s timeout)...', true);
   try {
-    const data = await api('/api/scan_tag?type=product');
+    const data = await scanTag('product');
     await api('/api/products', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -223,7 +401,7 @@ async function scanProduct() {
     setMsg('productMsg', 'Product added: ' + data.uid, true);
     loadProducts();
   } catch (e) {
-    setMsg('productMsg', e.message, false);
+    if (e.data && e.data.error === 'conflict') return;
   }
 }
 
@@ -262,9 +440,12 @@ async function saveSettings() {
 }
 
 refreshStatus();
+loadTime();
+loadLogs();
 loadUsers();
 loadProducts();
 setInterval(refreshStatus, 2000);
+setInterval(loadLogs, 10000);
 </script>
 </body>
 </html>

@@ -9,9 +9,9 @@ static LiquidCrystal_I2C lcd(LCD_I2C_ADDR, LCD_COLS, LCD_ROWS);
 static SemaphoreHandle_t statusMutex = nullptr;
 static SystemStatus sharedStatus = {};
 
-static void copyStatus(SystemStatus& dest, const SystemStatus& src) {
-    if (xSemaphoreTake(statusMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        dest = src;
+static void copyStatus(SystemStatus& dest) {
+    if (statusMutex && xSemaphoreTake(statusMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        dest = sharedStatus;
         xSemaphoreGive(statusMutex);
     }
 }
@@ -31,11 +31,11 @@ static void padLine(char* buf, size_t len) {
 
 static void lcdTask(void* param) {
     (void)param;
-    SystemStatus st;
+    SystemStatus st = {};
     char line[LCD_COLS + 1];
 
     for (;;) {
-        copyStatus(st, sharedStatus);
+        copyStatus(st);
 
         // Line 1: system state
         snprintf(line, sizeof(line), "%-19s", systemStateName(st.state));

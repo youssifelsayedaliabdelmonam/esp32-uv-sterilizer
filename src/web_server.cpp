@@ -7,6 +7,7 @@
 #include <WebServer.h>
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
+#include <sys/time.h>
 
 static WebServer server(WEB_SERVER_PORT);
 static QueueHandle_t webCmdQueue = nullptr;
@@ -23,6 +24,16 @@ static void sendError(int code, const char* msg) {
     String out;
     serializeJson(doc, out);
     sendJson(code, out);
+}
+
+static void sendConflict(const char* message, const char* uid) {
+    StaticJsonDocument<256> doc;
+    doc["error"] = "conflict";
+    doc["message"] = message;
+    doc["uid"] = uid;
+    String out;
+    serializeJson(doc, out);
+    sendJson(409, out);
 }
 
 static void handleRoot() {
@@ -103,6 +114,35 @@ static void handlePostUsers() {
     sendJson(201, out);
 }
 
+static void handlePutUsers() {
+    if (!server.hasArg("plain")) {
+        sendError(400, "Missing JSON body");
+        return;
+    }
+    StaticJsonDocument<256> doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+        sendError(400, "Invalid JSON");
+        return;
+    }
+    const char* uid = doc["uid"];
+    const char* name = doc["name"] | "";
+    bool overwrite = doc["overwrite"] | false;
+    if (!uid || strlen(uid) == 0) {
+        sendError(400, "uid required");
+        return;
+    }
+    if (overwrite) {
+        if (!storage.reassignTag(String(uid), STORAGE_TAG_USER, String(name))) {
+            sendError(409, "Cannot reassign tag as user");
+            return;
+        }
+    } else if (!storage.addUser(String(uid), String(name))) {
+        sendError(409, "Cannot add user (duplicate or max reached)");
+        return;
+    }
+    sendJson(200, "{\"success\":true}");
+}
+
 static void handleDeleteUser() {
     if (!server.hasArg("uid")) {
         sendError(400, "uid query param required");
@@ -151,6 +191,34 @@ static void handlePostProduct() {
     sendJson(201, "{\"success\":true}");
 }
 
+static void handlePutProduct() {
+    if (!server.hasArg("plain")) {
+        sendError(400, "Missing JSON body");
+        return;
+    }
+    StaticJsonDocument<256> doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+        sendError(400, "Invalid JSON");
+        return;
+    }
+    const char* uid = doc["uid"];
+    bool overwrite = doc["overwrite"] | false;
+    if (!uid || strlen(uid) == 0) {
+        sendError(400, "uid required");
+        return;
+    }
+    if (overwrite) {
+        if (!storage.reassignTag(String(uid), STORAGE_TAG_PRODUCT)) {
+            sendError(409, "Cannot reassign tag as product");
+            return;
+        }
+    } else if (!storage.addProduct(String(uid))) {
+        sendError(409, "Cannot add product (duplicate)");
+        return;
+    }
+    sendJson(200, "{\"success\":true}");
+}
+
 static void handleDeleteProduct() {
     if (!server.hasArg("uid")) {
         sendError(400, "uid query param required");
@@ -187,6 +255,17 @@ static void handleScanTag() {
     bool ok = rfidWaitEnrollmentResult(uid, sizeof(uid), ENROLLMENT_TIMEOUT_MS);
 
     if (ok) {
+        String uidStr(uid);
+        StorageTagType stype = (et == ENROLL_PRODUCT) ? STORAGE_TAG_PRODUCT : STORAGE_TAG_USER;
+        TagConflictType conflict = storage.checkTagConflict(uidStr, stype);
+        if (conflict == TAG_CONFLICT_IS_PRODUCT) {
+            sendConflict("This tag is already registered as a product. Reassign?", uid);
+            return;
+        }
+        if (conflict == TAG_CONFLICT_IS_USER) {
+            sendConflict("This tag is already registered as a user. Reassign?", uid);
+            return;
+        }
         StaticJsonDocument<128> doc;
         doc["uid"] = uid;
         String out;
@@ -195,6 +274,97 @@ static void handleScanTag() {
     } else {
         sendError(408, "Scan timeout - no tag detected");
     }
+}
+
+static void handleReassign() {
+    if (!server.hasArg("plain")) {
+        sendError(400, "Missing JSON body");
+        return;
+    }
+    StaticJsonDocument<256> doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+        sendError(400, "Invalid JSON");
+        return;
+    }
+    const char* uid = doc["uid"];
+    const char* type = doc["type"];
+    const char* name = doc["name"] | "";
+    if (!uid || !type) {
+        sendError(400, "uid and type required");
+        return;
+    }
+    StorageTagType newType;
+    if (strcmp(type, "user") == 0) {
+        newType = STORAGE_TAG_USER;
+    } else if (strcmp(type, "product") == 0) {
+        newType = STORAGE_TAG_PRODUCT;
+    } else {
+        sendError(400, "type must be user or product");
+        return;
+    }
+    if (!storage.reassignTag(String(uid), newType, String(name))) {
+        sendError(409, "Reassign failed");
+        return;
+    }
+    sendJson(200, "{\"success\":true}");
+}
+
+static void handleGetLogs() {
+    std::vector<CycleLogEntry> logs;
+    storage.loadLogs(logs);
+    DynamicJsonDocument doc(LOG_JSON_DOC_SIZE);
+    JsonArray arr = doc.createNestedArray("logs");
+    for (const auto& e : logs) {
+        JsonObject obj = arr.createNestedObject();
+        obj["user_uid"]    = e.userUid;
+        obj["product_uid"] = e.productUid;
+        obj["timestamp"]   = e.timestamp;
+    }
+    String out;
+    serializeJson(doc, out);
+    sendJson(200, out);
+}
+
+static void handleGetTime() {
+    time_t now = storage.getSystemTime();
+    StaticJsonDocument<256> doc;
+    doc["timestamp"] = (long)now;
+    doc["formatted"] = storage.formatCurrentTime();
+    doc["set"] = (now > 1000000000L);
+    String out;
+    serializeJson(doc, out);
+    sendJson(200, out);
+}
+
+static void handlePostTime() {
+    if (!server.hasArg("plain")) {
+        sendError(400, "Missing JSON body");
+        return;
+    }
+    StaticJsonDocument<128> doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+        sendError(400, "Invalid JSON");
+        return;
+    }
+    if (!doc.containsKey("timestamp")) {
+        sendError(400, "timestamp required");
+        return;
+    }
+    long ts = doc["timestamp"];
+    if (ts < 0) {
+        sendError(400, "Invalid timestamp");
+        return;
+    }
+    if (!storage.setSystemTime((time_t)ts)) {
+        sendError(500, "Failed to set system time");
+        return;
+    }
+    StaticJsonDocument<256> resp;
+    resp["success"] = true;
+    resp["formatted"] = storage.formatCurrentTime();
+    String out;
+    serializeJson(resp, out);
+    sendJson(200, out);
 }
 
 static void handlePostSettings() {
@@ -228,11 +398,17 @@ static void setupRoutes() {
     server.on("/api/status", HTTP_GET, handleStatus);
     server.on("/api/users", HTTP_GET, handleGetUsers);
     server.on("/api/users", HTTP_POST, handlePostUsers);
+    server.on("/api/users", HTTP_PUT, handlePutUsers);
     server.on("/api/users", HTTP_DELETE, handleDeleteUser);
     server.on("/api/products", HTTP_GET, handleGetProducts);
     server.on("/api/products", HTTP_POST, handlePostProduct);
+    server.on("/api/products", HTTP_PUT, handlePutProduct);
     server.on("/api/products", HTTP_DELETE, handleDeleteProduct);
     server.on("/api/scan_tag", HTTP_GET, handleScanTag);
+    server.on("/api/reassign", HTTP_POST, handleReassign);
+    server.on("/api/logs", HTTP_GET, handleGetLogs);
+    server.on("/api/time", HTTP_GET, handleGetTime);
+    server.on("/api/time", HTTP_POST, handlePostTime);
     server.on("/api/settings", HTTP_POST, handlePostSettings);
     server.onNotFound(handleNotFound);
 }
