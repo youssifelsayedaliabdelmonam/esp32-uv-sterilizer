@@ -66,6 +66,8 @@ static void handleStatus() {
     doc["ap_ip"] = st.apIp;
     doc["entrance_rfid_ok"] = st.entranceRfidOk;
     doc["inside_rfid_ok"] = st.insideRfidOk;
+    doc["entrance_rfid_version"] = rfidEntranceVersion();
+    doc["inside_rfid_version"] = rfidInsideVersion();
     doc["uv_duration_sec"] = storage.getUvDurationSec();
     String out;
     serializeJson(doc, out);

@@ -209,6 +209,13 @@ function setMsg(id, text, ok) {
   el.className = 'msg ' + (ok ? 'ok' : 'err');
 }
 
+function rfidBadge(ok, version) {
+  if (version === 0) return '<span class="badge off">N/A</span>';
+  const label = ok ? 'OK' : 'Error';
+  const cls = ok ? 'on' : 'off';
+  return `<span class="badge ${cls}">${label} (0x${version.toString(16).toUpperCase().padStart(2,'0')})</span>`;
+}
+
 async function refreshStatus() {
   try {
     const s = await api('/api/status');
@@ -220,10 +227,10 @@ async function refreshStatus() {
       ? '<span class="badge off">Locked</span>' : '<span class="badge on">Open</span>';
     document.getElementById('st_lamp').innerHTML = s.uv_lamp_on
       ? '<span class="badge on">ON</span>' : '<span class="badge off">OFF</span>';
-    document.getElementById('st_rfid_ent').innerHTML = s.entrance_rfid_ok
-      ? '<span class="badge on">OK</span>' : '<span class="badge off">Error</span>';
-    document.getElementById('st_rfid_in').innerHTML = s.inside_rfid_ok
-      ? '<span class="badge on">OK</span>' : '<span class="badge off">Error</span>';
+    document.getElementById('st_rfid_ent').innerHTML =
+      rfidBadge(s.entrance_rfid_ok, s.entrance_rfid_version);
+    document.getElementById('st_rfid_in').innerHTML =
+      rfidBadge(s.inside_rfid_ok, s.inside_rfid_version);
     document.getElementById('uvDuration').value = s.uv_duration_sec;
   } catch (e) {
     setMsg('statusMsg', e.message, false);

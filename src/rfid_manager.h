@@ -19,5 +19,7 @@ bool rfidIsEnrollmentActive();
 // Query reader health flags
 bool rfidEntranceHealthy();
 bool rfidInsideHealthy();
+uint8_t rfidEntranceVersion();
+uint8_t rfidInsideVersion();
 
 #endif // RFID_MANAGER_H

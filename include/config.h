@@ -81,7 +81,11 @@
 #define RFID_REINIT_COOLDOWN_MS     3000
 #define RFID_INIT_DELAY_MS          50
 #define RFID_HEALTH_CHECK_INTERVAL_MS 3000
+#define RFID_INIT_RETRY_COUNT       5
 #define RFID_SPI_SPEED_HZ           1000000
+
+// Set to 0 if inside reader is not installed (UI will show N/A, not Error)
+#define INSIDE_RFID_ENABLED         1
 
 // -----------------------------------------------------------------------------
 // Storage Limits
