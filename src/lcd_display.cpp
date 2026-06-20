@@ -29,6 +29,22 @@ static void padLine(char* buf, size_t len) {
     buf[len - 1] = '\0';
 }
 
+static const char* userLabel(const SystemStatus& st) {
+    if (st.lastUserName[0]) return st.lastUserName;
+    if (st.lastUserUid[0]) return st.lastUserUid;
+    return nullptr;
+}
+
+static const char* productLabel(const SystemStatus& st) {
+    if (st.lastProductName[0]) return st.lastProductName;
+    if (st.lastProductUid[0]) return st.lastProductUid;
+    return nullptr;
+}
+
+static uint32_t timeoutSec(const SystemStatus& st) {
+    return (st.stateTimeoutRemainingMs + 999) / 1000;
+}
+
 static void lcdTask(void* param) {
     (void)param;
     SystemStatus st = {};
@@ -37,35 +53,55 @@ static void lcdTask(void* param) {
     for (;;) {
         copyStatus(st);
 
-        // Line 1: system state
-        snprintf(line, sizeof(line), "%-19s", systemStateName(st.state));
+        // Line 1: state + countdown
+        switch (st.state) {
+            case STATE_IDLE:
+                snprintf(line, sizeof(line), "System Ready");
+                break;
+            case STATE_DOOR_ENTRY:
+                snprintf(line, sizeof(line), "Entry: %lus open",
+                         (unsigned long)timeoutSec(st));
+                break;
+            case STATE_WAITING_FOR_PRODUCT:
+                snprintf(line, sizeof(line), "Scan product tag");
+                break;
+            case STATE_UV_ACTIVE:
+                snprintf(line, sizeof(line), "UV: %lus remaining",
+                         (unsigned long)st.uvTimeRemainingSec);
+                break;
+            case STATE_UV_DONE:
+                snprintf(line, sizeof(line), "Exit: %lus open",
+                         (unsigned long)timeoutSec(st));
+                break;
+            default:
+                snprintf(line, sizeof(line), "%s", systemStateName(st.state));
+                break;
+        }
+        padLine(line, LCD_COLS + 1);
         lcd.setCursor(0, 0);
         lcd.print(line);
 
-        // Line 2: door state + last user
-        snprintf(line, sizeof(line), "E:%s X:%s",
-                 st.entranceLocked ? "L" : "U",
-                 st.exitLocked ? "L" : "U");
-        if (st.lastUserUid[0]) {
-            char tmp[12];
-            snprintf(tmp, sizeof(tmp), " %s", st.lastUserUid);
-            strncat(line, tmp, sizeof(line) - strlen(line) - 1);
+        // Line 2: user name
+        const char* user = userLabel(st);
+        if (user) {
+            snprintf(line, sizeof(line), "User: %.13s", user);
+        } else {
+            snprintf(line, sizeof(line), "E:%s X:%s",
+                     st.entranceLocked ? "Lock" : "Open",
+                     st.exitLocked ? "Lock" : "Open");
         }
         padLine(line, LCD_COLS + 1);
         lcd.setCursor(0, 1);
         lcd.print(line);
 
-        // Line 3: last product UID
-        if (st.lastProductUid[0]) {
-            snprintf(line, sizeof(line), "Prod:%s", st.lastProductUid);
+        // Line 3: product name or prompt
+        const char* prod = productLabel(st);
+        if (prod) {
+            snprintf(line, sizeof(line), "Prod: %.13s", prod);
         } else if (st.state == STATE_WAITING_FOR_PRODUCT) {
-            snprintf(line, sizeof(line), "Place prod, scan");
-        } else if (st.state == STATE_IDLE) {
-            snprintf(line, sizeof(line), "System Ready");
-        } else if (st.state == STATE_UV_ACTIVE) {
-            snprintf(line, sizeof(line), "UV: %lu sec left", (unsigned long)st.uvTimeRemainingSec);
+            snprintf(line, sizeof(line), "Place product inside");
         } else if (st.state == STATE_UV_DONE) {
-            snprintf(line, sizeof(line), "Cycle complete,exit");
+            snprintf(line, sizeof(line), "Cycle complete");
         } else {
             snprintf(line, sizeof(line), " ");
         }
@@ -73,15 +109,22 @@ static void lcdTask(void* param) {
         lcd.setCursor(0, 2);
         lcd.print(line);
 
-        // Line 4: AP status or UV countdown on line 3 duplicate for UV
+        // Line 4: AP status or active countdown
         if (st.webServerActive && st.apIp[0]) {
             snprintf(line, sizeof(line), "AP: %s", st.apIp);
         } else if (st.state == STATE_UV_ACTIVE) {
-            snprintf(line, sizeof(line), "UV active...");
+            snprintf(line, sizeof(line), "UV lamp ON %lus",
+                     (unsigned long)st.uvTimeRemainingSec);
+        } else if (st.state == STATE_DOOR_ENTRY) {
+            snprintf(line, sizeof(line), "Door closing %lus",
+                     (unsigned long)timeoutSec(st));
+        } else if (st.state == STATE_UV_DONE) {
+            snprintf(line, sizeof(line), "Exit closes %lus",
+                     (unsigned long)timeoutSec(st));
         } else if (st.webServerActive) {
             snprintf(line, sizeof(line), "Web server ON");
         } else {
-            snprintf(line, sizeof(line), "AP off");
+            snprintf(line, sizeof(line), "BOOT 5s = admin");
         }
         padLine(line, LCD_COLS + 1);
         lcd.setCursor(0, 3);

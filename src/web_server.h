@@ -9,6 +9,7 @@
 void webServerInit();
 void webServerStartManagerTask();
 void webServerToggle();
+void webServerStop();
 bool webServerIsActive();
 
 #endif // WEB_SERVER_H

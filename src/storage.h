@@ -17,11 +17,14 @@ struct UserTag {
 
 struct ProductTag {
     String uid;
+    String name;
 };
 
 struct CycleLogEntry {
     String userUid;
+    String userName;
     String productUid;
+    String productName;
     String timestamp;
 };
 
@@ -52,9 +55,11 @@ public:
     // Product tags (unlimited)
     bool loadProducts(std::vector<ProductTag>& products);
     bool saveProducts(const std::vector<ProductTag>& products);
-    bool addProduct(const String& uid);
+    bool addProduct(const String& uid, const String& name = "");
     bool deleteProduct(const String& uid);
-    bool isProductTag(const String& uid);
+    bool isProductTag(const String& uid, String* outName = nullptr);
+    String getUserDisplayName(const String& uid);
+    String getProductDisplayName(const String& uid);
 
     // UV duration (NVS)
     uint32_t getUvDurationSec();
@@ -72,6 +77,8 @@ public:
 
     // System time (set via web UI; optionally restored from NVS at boot)
     bool setSystemTime(time_t epoch);
+    bool setSystemTimeFromParts(int year, int month, int day,
+                                int hour, int minute, int second);
     time_t getSystemTime();
     String formatTime(time_t epoch);
     String formatCurrentTime();

@@ -111,17 +111,20 @@ input[type="text"], input[type="number"], input[type="datetime-local"] {
     <div class="stat"><label>Entrance RFID</label><span id="st_rfid_ent">--</span></div>
     <div class="stat"><label>Inside RFID</label><span id="st_rfid_in">--</span></div>
   </div>
+  <div class="row">
+    <button class="danger" id="stopApBtn" style="display:none" onclick="stopAp()">Stop Admin WiFi</button>
+  </div>
   <p class="msg" id="statusMsg"></p>
 </div>
 
 <div class="card">
   <h2>Date &amp; Time</h2>
   <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem">
-    Set the system clock for accurate log timestamps. Restored from NVS after reboot if previously set.
+    Set the clock for log timestamps. Time is stored as entered (wall clock).
   </p>
   <div class="row">
     <span id="currentTime">--</span>
-    <input type="datetime-local" id="datetimeInput">
+    <input type="datetime-local" id="datetimeInput" step="1">
     <button onclick="setTime()">Set Time</button>
     <button class="secondary" onclick="loadTime()">Refresh</button>
   </div>
@@ -140,7 +143,7 @@ input[type="text"], input[type="number"], input[type="datetime-local"] {
 <div class="card">
   <h2>Sterilization Log</h2>
   <table>
-    <thead><tr><th>Timestamp</th><th>User UID</th><th>Product UID</th></tr></thead>
+    <thead><tr><th>Timestamp</th><th>User</th><th>Product</th></tr></thead>
     <tbody id="logsTable"></tbody>
   </table>
   <div class="row" style="margin-top:0.75rem">
@@ -166,10 +169,11 @@ input[type="text"], input[type="number"], input[type="datetime-local"] {
 <div class="card">
   <h2>Product Tags</h2>
   <table>
-    <thead><tr><th>UID</th><th></th></tr></thead>
+    <thead><tr><th>UID</th><th>Name</th><th></th></tr></thead>
     <tbody id="productsTable"></tbody>
   </table>
   <div class="row" style="margin-top:0.75rem">
+    <input type="text" id="productName" placeholder="Name (optional)">
     <button onclick="scanProduct()">Scan Tag</button>
     <button class="secondary" onclick="loadProducts()">Refresh</button>
   </div>
@@ -189,6 +193,10 @@ input[type="text"], input[type="number"], input[type="datetime-local"] {
 
 <script>
 let pendingConflict = null;
+let uvDurationEditing = false;
+
+document.getElementById('uvDuration').addEventListener('focus', () => { uvDurationEditing = true; });
+document.getElementById('uvDuration').addEventListener('blur', () => { uvDurationEditing = false; });
 
 const api = (path, opts = {}) => fetch(path, opts).then(async r => {
   const text = await r.text();
@@ -216,6 +224,10 @@ function rfidBadge(ok, version) {
   return `<span class="badge ${cls}">${label} (0x${version.toString(16).toUpperCase().padStart(2,'0')})</span>`;
 }
 
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+}
+
 async function refreshStatus() {
   try {
     const s = await api('/api/status');
@@ -231,10 +243,22 @@ async function refreshStatus() {
       rfidBadge(s.entrance_rfid_ok, s.entrance_rfid_version);
     document.getElementById('st_rfid_in').innerHTML =
       rfidBadge(s.inside_rfid_ok, s.inside_rfid_version);
-    document.getElementById('uvDuration').value = s.uv_duration_sec;
+    if (!uvDurationEditing) {
+      document.getElementById('uvDuration').value = s.uv_duration_sec;
+    }
+    document.getElementById('stopApBtn').style.display =
+      s.web_server_active ? 'inline-block' : 'none';
   } catch (e) {
     setMsg('statusMsg', e.message, false);
   }
+}
+
+async function stopAp() {
+  if (!confirm('Stop admin WiFi? This page will disconnect.')) return;
+  try {
+    await api('/api/ap/stop', { method: 'POST' });
+  } catch (e) { /* connection may drop */ }
+  alert('Admin WiFi stopped. Hold BOOT button 5 seconds to enable again.');
 }
 
 async function loadTime() {
@@ -242,12 +266,12 @@ async function loadTime() {
     const t = await api('/api/time');
     document.getElementById('currentTime').textContent = t.set
       ? t.formatted : '(not set)';
-    if (t.set) {
+    if (t.set && t.timestamp > 0) {
       const d = new Date(t.timestamp * 1000);
       const pad = n => String(n).padStart(2, '0');
-      const local = d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate())
-        + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-      document.getElementById('datetimeInput').value = local;
+      document.getElementById('datetimeInput').value =
+        d.getUTCFullYear() + '-' + pad(d.getUTCMonth()+1) + '-' + pad(d.getUTCDate()) +
+        'T' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds());
     }
   } catch (e) {
     setMsg('timeMsg', e.message, false);
@@ -260,12 +284,24 @@ async function setTime() {
     setMsg('timeMsg', 'Select date and time first', false);
     return;
   }
-  const ts = Math.floor(new Date(val).getTime() / 1000);
+  const parts = val.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!parts) {
+    setMsg('timeMsg', 'Invalid date/time format', false);
+    return;
+  }
+  const body = {
+    year: parseInt(parts[1], 10),
+    month: parseInt(parts[2], 10),
+    day: parseInt(parts[3], 10),
+    hour: parseInt(parts[4], 10),
+    minute: parseInt(parts[5], 10),
+    second: parseInt(parts[6] || '0', 10)
+  };
   try {
     const r = await api('/api/time', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ timestamp: ts })
+      body: JSON.stringify(body)
     });
     document.getElementById('currentTime').textContent = r.formatted;
     setMsg('timeMsg', 'Time set: ' + r.formatted, true);
@@ -285,7 +321,7 @@ async function loadLogs() {
     } else {
       logs.forEach(l => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${l.timestamp}</td><td>${l.user_uid}</td><td>${l.product_uid}</td>`;
+        tr.innerHTML = `<td>${esc(l.timestamp)}</td><td>${esc(l.user_name || l.user_uid)}</td><td>${esc(l.product_name || l.product_uid)}</td>`;
         tbody.appendChild(tr);
       });
     }
@@ -302,8 +338,8 @@ async function loadUsers() {
     tbody.innerHTML = '';
     (data.users || []).forEach(u => {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${u.uid}</td><td>${u.name || ''}</td>
-        <td><button class="danger" onclick="deleteUser('${u.uid}')">Delete</button></td>`;
+      tr.innerHTML = `<td>${esc(u.uid)}</td><td>${esc(u.name || '')}</td>
+        <td><button class="danger" onclick="deleteUser(${JSON.stringify(u.uid)})">Delete</button></td>`;
       tbody.appendChild(tr);
     });
     setMsg('userMsg', (data.users || []).length + ' user(s)', true);
@@ -319,8 +355,8 @@ async function loadProducts() {
     tbody.innerHTML = '';
     (data.products || []).forEach(p => {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${p.uid}</td>
-        <td><button class="danger" onclick="deleteProduct('${p.uid}')">Delete</button></td>`;
+      tr.innerHTML = `<td>${esc(p.uid)}</td><td>${esc(p.name || '')}</td>
+        <td><button class="danger" onclick="deleteProduct(${JSON.stringify(p.uid)})">Delete</button></td>`;
       tbody.appendChild(tr);
     });
     setMsg('productMsg', (data.products || []).length + ' product(s)', true);
@@ -373,7 +409,9 @@ async function scanTag(type) {
     return data;
   } catch (e) {
     if (e.data && e.data.error === 'conflict') {
-      const name = type === 'user' ? document.getElementById('userName').value.trim() : '';
+      const name = type === 'user'
+        ? document.getElementById('userName').value.trim()
+        : document.getElementById('productName').value.trim();
       showConflict(e.data.message, e.data.uid, type, name);
       throw e;
     }
@@ -402,11 +440,13 @@ async function scanUser() {
 async function scanProduct() {
   try {
     const data = await scanTag('product');
+    const name = document.getElementById('productName').value.trim();
     await api('/api/products', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uid: data.uid })
+      body: JSON.stringify({ uid: data.uid, name: name })
     });
+    document.getElementById('productName').value = '';
     setMsg('productMsg', 'Product added: ' + data.uid, true);
     loadProducts();
   } catch (e) {
@@ -436,13 +476,19 @@ async function deleteProduct(uid) {
 
 async function saveSettings() {
   const dur = parseInt(document.getElementById('uvDuration').value, 10);
+  if (isNaN(dur) || dur < 5 || dur > 600) {
+    setMsg('settingsMsg', 'Duration must be 5–600 seconds', false);
+    return;
+  }
   try {
     await api('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uv_duration: dur })
     });
+    uvDurationEditing = false;
     setMsg('settingsMsg', 'UV duration saved: ' + dur + 's', true);
+    refreshStatus();
   } catch (e) {
     setMsg('settingsMsg', e.message, false);
   }

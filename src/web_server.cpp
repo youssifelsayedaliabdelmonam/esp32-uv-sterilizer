@@ -62,6 +62,8 @@ static void handleStatus() {
     doc["uv_lamp_on"] = st.uvLampOn;
     doc["last_user_uid"] = st.lastUserUid;
     doc["last_product_uid"] = st.lastProductUid;
+    doc["last_user_name"] = st.lastUserName;
+    doc["last_product_name"] = st.lastProductName;
     doc["web_server_active"] = st.webServerActive;
     doc["ap_ip"] = st.apIp;
     doc["entrance_rfid_ok"] = st.entranceRfidOk;
@@ -164,7 +166,8 @@ static void handleGetProducts() {
     JsonArray arr = doc.createNestedArray("products");
     for (const auto& p : products) {
         JsonObject obj = arr.createNestedObject();
-        obj["uid"] = p.uid;
+        obj["uid"]  = p.uid;
+        obj["name"] = p.name;
     }
     String out;
     serializeJson(doc, out);
@@ -182,11 +185,12 @@ static void handlePostProduct() {
         return;
     }
     const char* uid = doc["uid"];
+    const char* name = doc["name"] | "";
     if (!uid || strlen(uid) == 0) {
         sendError(400, "uid required");
         return;
     }
-    if (!storage.addProduct(String(uid))) {
+    if (!storage.addProduct(String(uid), String(name))) {
         sendError(409, "Cannot add product (duplicate)");
         return;
     }
@@ -204,17 +208,18 @@ static void handlePutProduct() {
         return;
     }
     const char* uid = doc["uid"];
+    const char* name = doc["name"] | "";
     bool overwrite = doc["overwrite"] | false;
     if (!uid || strlen(uid) == 0) {
         sendError(400, "uid required");
         return;
     }
     if (overwrite) {
-        if (!storage.reassignTag(String(uid), STORAGE_TAG_PRODUCT)) {
+        if (!storage.reassignTag(String(uid), STORAGE_TAG_PRODUCT, String(name))) {
             sendError(409, "Cannot reassign tag as product");
             return;
         }
-    } else if (!storage.addProduct(String(uid))) {
+    } else if (!storage.addProduct(String(uid), String(name))) {
         sendError(409, "Cannot add product (duplicate)");
         return;
     }
@@ -318,9 +323,11 @@ static void handleGetLogs() {
     JsonArray arr = doc.createNestedArray("logs");
     for (const auto& e : logs) {
         JsonObject obj = arr.createNestedObject();
-        obj["user_uid"]    = e.userUid;
-        obj["product_uid"] = e.productUid;
-        obj["timestamp"]   = e.timestamp;
+        obj["user_uid"]     = e.userUid;
+        obj["user_name"]    = e.userName;
+        obj["product_uid"]  = e.productUid;
+        obj["product_name"] = e.productName;
+        obj["timestamp"]    = e.timestamp;
     }
     String out;
     serializeJson(doc, out);
@@ -343,22 +350,33 @@ static void handlePostTime() {
         sendError(400, "Missing JSON body");
         return;
     }
-    StaticJsonDocument<128> doc;
+    StaticJsonDocument<256> doc;
     if (deserializeJson(doc, server.arg("plain"))) {
         sendError(400, "Invalid JSON");
         return;
     }
-    if (!doc.containsKey("timestamp")) {
-        sendError(400, "timestamp required");
+
+    bool ok = false;
+    if (doc.containsKey("year") && doc.containsKey("month") && doc.containsKey("day")) {
+        int year   = doc["year"];
+        int month  = doc["month"];
+        int day    = doc["day"];
+        int hour   = doc["hour"] | 0;
+        int minute = doc["minute"] | 0;
+        int second = doc["second"] | 0;
+        ok = storage.setSystemTimeFromParts(year, month, day, hour, minute, second);
+    } else if (doc.containsKey("timestamp")) {
+        long ts = doc["timestamp"].as<long>();
+        if (ts > 0) {
+            ok = storage.setSystemTime((time_t)ts);
+        }
+    } else {
+        sendError(400, "Send year/month/day/hour/minute or timestamp");
         return;
     }
-    long ts = doc["timestamp"];
-    if (ts < 0) {
-        sendError(400, "Invalid timestamp");
-        return;
-    }
-    if (!storage.setSystemTime((time_t)ts)) {
-        sendError(500, "Failed to set system time");
+
+    if (!ok) {
+        sendError(400, "Failed to set system time");
         return;
     }
     StaticJsonDocument<256> resp;
@@ -367,6 +385,11 @@ static void handlePostTime() {
     String out;
     serializeJson(resp, out);
     sendJson(200, out);
+}
+
+static void handleApStop() {
+    webServerStop();
+    sendJson(200, "{\"success\":true,\"message\":\"AP stopped\"}");
 }
 
 static void handlePostSettings() {
@@ -381,6 +404,10 @@ static void handlePostSettings() {
     }
     if (!doc.containsKey("uv_duration")) {
         sendError(400, "uv_duration required");
+        return;
+    }
+    if (!doc["uv_duration"].is<uint32_t>() && !doc["uv_duration"].is<int>()) {
+        sendError(400, "uv_duration must be a number");
         return;
     }
     uint32_t dur = doc["uv_duration"];
@@ -411,6 +438,7 @@ static void setupRoutes() {
     server.on("/api/logs", HTTP_GET, handleGetLogs);
     server.on("/api/time", HTTP_GET, handleGetTime);
     server.on("/api/time", HTTP_POST, handlePostTime);
+    server.on("/api/ap/stop", HTTP_POST, handleApStop);
     server.on("/api/settings", HTTP_POST, handlePostSettings);
     server.onNotFound(handleNotFound);
 }
@@ -490,6 +518,12 @@ void webServerStartManagerTask() {
 void webServerToggle() {
     if (!webCmdQueue) return;
     WebServerCmd cmd = webActive ? WEB_CMD_STOP : WEB_CMD_START;
+    xQueueSend(webCmdQueue, &cmd, pdMS_TO_TICKS(500));
+}
+
+void webServerStop() {
+    if (!webCmdQueue) return;
+    WebServerCmd cmd = WEB_CMD_STOP;
     xQueueSend(webCmdQueue, &cmd, pdMS_TO_TICKS(500));
 }
 

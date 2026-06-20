@@ -74,6 +74,8 @@ bool Storage::begin() {
         prefs.putUInt(NVS_KEY_UV_DURATION, UV_DURATION_DEFAULT_SEC);
     }
 
+    setenv("TZ", "UTC0", 1);
+    tzset();
     applySavedTime();
     return true;
 }
@@ -193,7 +195,8 @@ bool Storage::loadProducts(std::vector<ProductTag>& products) {
         if (!arr.isNull()) {
             for (JsonObject obj : arr) {
                 ProductTag p;
-                p.uid = obj["uid"].as<String>();
+                p.uid  = obj["uid"].as<String>();
+                p.name = obj["name"] | "";
                 if (p.uid.length() > 0) products.push_back(p);
             }
         }
@@ -208,20 +211,21 @@ bool Storage::saveProducts(const std::vector<ProductTag>& products) {
     JsonArray arr = doc.createNestedArray("products");
     for (const auto& p : products) {
         JsonObject obj = arr.createNestedObject();
-        obj["uid"] = p.uid;
+        obj["uid"]  = p.uid;
+        obj["name"] = p.name;
     }
     bool ok = writeJsonFile(PRODUCTS_JSON_PATH, doc);
     unlockStorage();
     return ok;
 }
 
-bool Storage::addProduct(const String& uid) {
+bool Storage::addProduct(const String& uid, const String& name) {
     std::vector<ProductTag> products;
     loadProducts(products);
     for (const auto& p : products) {
         if (p.uid.equalsIgnoreCase(uid)) return false;
     }
-    products.push_back({uid});
+    products.push_back({uid, name});
     return saveProducts(products);
 }
 
@@ -240,13 +244,28 @@ bool Storage::deleteProduct(const String& uid) {
     return found && saveProducts(products);
 }
 
-bool Storage::isProductTag(const String& uid) {
+bool Storage::isProductTag(const String& uid, String* outName) {
     std::vector<ProductTag> products;
     loadProducts(products);
     for (const auto& p : products) {
-        if (p.uid.equalsIgnoreCase(uid)) return true;
+        if (p.uid.equalsIgnoreCase(uid)) {
+            if (outName) *outName = p.name;
+            return true;
+        }
     }
     return false;
+}
+
+String Storage::getUserDisplayName(const String& uid) {
+    String name;
+    if (isUserTag(uid, &name) && name.length() > 0) return name;
+    return uid;
+}
+
+String Storage::getProductDisplayName(const String& uid) {
+    String name;
+    if (isProductTag(uid, &name) && name.length() > 0) return name;
+    return uid;
 }
 
 uint32_t Storage::getUvDurationSec() {
@@ -258,7 +277,8 @@ uint32_t Storage::getUvDurationSec() {
 
 bool Storage::setUvDurationSec(uint32_t seconds) {
     if (seconds < UV_DURATION_MIN_SEC || seconds > UV_DURATION_MAX_SEC) return false;
-    return prefs.putUInt(NVS_KEY_UV_DURATION, seconds) > 0;
+    prefs.putUInt(NVS_KEY_UV_DURATION, seconds);
+    return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -280,6 +300,26 @@ bool Storage::setSystemTime(time_t epoch) {
     saveLastTime(epoch);
     Serial.printf("[Storage] System time set to %ld\n", (long)epoch);
     return true;
+}
+
+bool Storage::setSystemTimeFromParts(int year, int month, int day,
+                                     int hour, int minute, int second) {
+    if (year < 2020 || year > 2099 || month < 1 || month > 12 ||
+        day < 1 || day > 31 || hour < 0 || hour > 23 ||
+        minute < 0 || minute > 59 || second < 0 || second > 59) {
+        return false;
+    }
+    struct tm t = {};
+    t.tm_year = year - 1900;
+    t.tm_mon  = month - 1;
+    t.tm_mday = day;
+    t.tm_hour = hour;
+    t.tm_min  = minute;
+    t.tm_sec  = second;
+    t.tm_isdst = -1;
+    time_t epoch = mktime(&t);
+    if (epoch < 0) return false;
+    return setSystemTime(epoch);
 }
 
 time_t Storage::getSystemTime() {
@@ -342,6 +382,8 @@ bool Storage::appendLog(const char* userUid, const char* productUid) {
     }
 
     String timestamp = formatCurrentTime();
+    String userName = getUserDisplayName(String(userUid));
+    String productName = getProductDisplayName(String(productUid));
 
     if (!lockStorage(pdMS_TO_TICKS(STORAGE_MUTEX_TIMEOUT_MS))) return false;
 
@@ -355,9 +397,11 @@ bool Storage::appendLog(const char* userUid, const char* productUid) {
     }
 
     JsonObject entry = arr.createNestedObject();
-    entry["user_uid"]    = userUid;
-    entry["product_uid"] = productUid;
-    entry["timestamp"]   = timestamp;
+    entry["user_uid"]      = userUid;
+    entry["user_name"]     = userName;
+    entry["product_uid"]   = productUid;
+    entry["product_name"]  = productName;
+    entry["timestamp"]     = timestamp;
 
     while ((int)arr.size() > MAX_LOG_ENTRIES) {
         arr.remove(0);
@@ -383,9 +427,13 @@ bool Storage::loadLogs(std::vector<CycleLogEntry>& logs) {
         if (!arr.isNull()) {
             for (JsonObject obj : arr) {
                 CycleLogEntry e;
-                e.userUid    = obj["user_uid"].as<String>();
-                e.productUid = obj["product_uid"].as<String>();
-                e.timestamp  = obj["timestamp"].as<String>();
+                e.userUid      = obj["user_uid"].as<String>();
+                e.userName     = obj["user_name"] | "";
+                e.productUid   = obj["product_uid"].as<String>();
+                e.productName  = obj["product_name"] | "";
+                e.timestamp    = obj["timestamp"].as<String>();
+                if (e.userName.length() == 0) e.userName = e.userUid;
+                if (e.productName.length() == 0) e.productName = e.productUid;
                 if (e.userUid.length() > 0) logs.push_back(e);
             }
         }
@@ -452,7 +500,8 @@ bool Storage::reassignTag(const String& uid, StorageTagType newType, const Strin
         }
     } else {
         JsonObject obj = productsArr.createNestedObject();
-        obj["uid"] = uid;
+        obj["uid"]  = uid;
+        obj["name"] = name;
         ok = true;
     }
 

@@ -69,6 +69,8 @@ struct SystemStatus {
     bool uvLampOn;
     char lastUserUid[24];
     char lastProductUid[24];
+    char lastUserName[20];
+    char lastProductName[20];
     bool webServerActive;
     char apIp[16];
     bool entranceRfidOk;

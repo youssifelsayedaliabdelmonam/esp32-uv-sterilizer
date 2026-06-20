@@ -101,12 +101,36 @@ static void transitionTo(SystemState newState) {
 }
 
 // Caller must hold statusMutex
+static void setLastUser(const char* uid) {
+    strncpy(currentStatus.lastUserUid, uid, sizeof(currentStatus.lastUserUid) - 1);
+    currentStatus.lastUserUid[sizeof(currentStatus.lastUserUid) - 1] = '\0';
+    String name;
+    if (storage.isUserTag(String(uid), &name) && name.length() > 0) {
+        strncpy(currentStatus.lastUserName, name.c_str(), sizeof(currentStatus.lastUserName) - 1);
+    } else {
+        currentStatus.lastUserName[0] = '\0';
+    }
+    currentStatus.lastUserName[sizeof(currentStatus.lastUserName) - 1] = '\0';
+}
+
+static void setLastProduct(const char* uid) {
+    strncpy(currentStatus.lastProductUid, uid, sizeof(currentStatus.lastProductUid) - 1);
+    currentStatus.lastProductUid[sizeof(currentStatus.lastProductUid) - 1] = '\0';
+    String name;
+    if (storage.isProductTag(String(uid), &name) && name.length() > 0) {
+        strncpy(currentStatus.lastProductName, name.c_str(), sizeof(currentStatus.lastProductName) - 1);
+    } else {
+        currentStatus.lastProductName[0] = '\0';
+    }
+    currentStatus.lastProductName[sizeof(currentStatus.lastProductName) - 1] = '\0';
+}
+
+// Caller must hold statusMutex
 static void handleTagEvent(const TagEvent& evt) {
     switch (currentStatus.state) {
         case STATE_IDLE:
             if (evt.source == TAG_SOURCE_ENTRANCE && evt.isUser) {
-                strncpy(currentStatus.lastUserUid, evt.uid, sizeof(currentStatus.lastUserUid) - 1);
-                currentStatus.lastUserUid[sizeof(currentStatus.lastUserUid) - 1] = '\0';
+                setLastUser(evt.uid);
                 transitionTo(STATE_DOOR_ENTRY);
             } else if (evt.source == TAG_SOURCE_ENTRANCE) {
                 buzzerRequest(BEEP_ERROR);
@@ -115,8 +139,7 @@ static void handleTagEvent(const TagEvent& evt) {
 
         case STATE_DOOR_ENTRY:
             if (evt.source == TAG_SOURCE_ENTRANCE && evt.isUser) {
-                strncpy(currentStatus.lastUserUid, evt.uid, sizeof(currentStatus.lastUserUid) - 1);
-                currentStatus.lastUserUid[sizeof(currentStatus.lastUserUid) - 1] = '\0';
+                setLastUser(evt.uid);
                 stateEnterMs = millis();
                 currentStatus.stateTimeoutRemainingMs = ENTRY_TIMEOUT_MS;
                 buzzerRequest(BEEP_SINGLE_SHORT);
@@ -129,8 +152,7 @@ static void handleTagEvent(const TagEvent& evt) {
 
         case STATE_WAITING_FOR_PRODUCT:
             if (evt.source == TAG_SOURCE_INSIDE && evt.isProduct) {
-                strncpy(currentStatus.lastProductUid, evt.uid, sizeof(currentStatus.lastProductUid) - 1);
-                currentStatus.lastProductUid[sizeof(currentStatus.lastProductUid) - 1] = '\0';
+                setLastProduct(evt.uid);
                 transitionTo(STATE_UV_ACTIVE);
             } else if (evt.source == TAG_SOURCE_INSIDE) {
                 buzzerRequest(BEEP_ERROR);
