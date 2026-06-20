@@ -9,21 +9,43 @@ static MFRC522 rfidEntrance(PIN_ENTRANCE_RFID_SS, PIN_ENTRANCE_RFID_RST);
 static MFRC522 rfidInside(PIN_INSIDE_RFID_SS, PIN_INSIDE_RFID_RST);
 
 static QueueHandle_t tagEventQueue = nullptr;
+static SemaphoreHandle_t spiMutex = nullptr;
 
 // Enrollment state (accessed by web task and rfid task)
 static volatile bool enrollmentActive = false;
-static volatile EnrollType enrollmentType = ENROLL_USER;
 static volatile bool enrollmentDone = false;
 static char enrollmentUid[24] = {};
 static SemaphoreHandle_t enrollMutex = nullptr;
 
-// Reader health counters (rfid task writes, other tasks read)
-static volatile bool entranceHealthy = true;
-static volatile bool insideHealthy = true;
+// Reader health (rfid task writes, other tasks read)
+static volatile bool entranceHealthy = false;
+static volatile bool insideHealthy = false;
 static uint8_t entranceFailCount = 0;
 static uint8_t insideFailCount = 0;
 static uint32_t lastEntranceReinit = 0;
 static uint32_t lastInsideReinit = 0;
+static uint32_t lastHealthCheckMs = 0;
+
+// Valid MFRC522 VersionReg values (incl. common clones)
+static bool isValidMfrc522Version(byte version) {
+    return version == 0x88 || version == 0x90 || version == 0x91 || version == 0x92;
+}
+
+static bool lockSpi(TickType_t timeout = pdMS_TO_TICKS(100)) {
+    return spiMutex && xSemaphoreTake(spiMutex, timeout) == pdTRUE;
+}
+
+static void unlockSpi() {
+    if (spiMutex) xSemaphoreGive(spiMutex);
+}
+
+// Both SS lines must be HIGH before SPI bus init (dual-reader requirement)
+static void deselectAllReaders() {
+    pinMode(PIN_ENTRANCE_RFID_SS, OUTPUT);
+    pinMode(PIN_INSIDE_RFID_SS, OUTPUT);
+    digitalWrite(PIN_ENTRANCE_RFID_SS, HIGH);
+    digitalWrite(PIN_INSIDE_RFID_SS, HIGH);
+}
 
 // Format MFRC522 UID as "AA:BB:CC:DD"
 static void formatUid(const MFRC522::Uid& uid, char* out, size_t outLen) {
@@ -39,33 +61,39 @@ static void formatUid(const MFRC522::Uid& uid, char* out, size_t outLen) {
     }
 }
 
-static bool checkReaderHealth(MFRC522& reader, volatile bool& healthyFlag, uint8_t& failCount,
+// Probe reader firmware version – only call while holding spiMutex
+static bool probeReaderHealth(MFRC522& reader, volatile bool& healthyFlag, uint8_t& failCount,
                               uint32_t& lastReinit, const char* name) {
     byte version = reader.PCD_ReadRegister(MFRC522::VersionReg);
-    bool healthy = true;
-    // Valid version values: 0x88, 0x90, 0x91, 0x92
-    if (version == 0x00 || version == 0xFF) {
-        failCount++;
-        if (failCount >= RFID_FAIL_THRESHOLD) {
-            healthy = false;
-            uint32_t now = millis();
-            if (now - lastReinit >= RFID_REINIT_COOLDOWN_MS) {
-                Serial.printf("[RFID] Re-init %s reader (fail count %u)\n", name, failCount);
-                reader.PCD_Init();
-                lastReinit = now;
-                version = reader.PCD_ReadRegister(MFRC522::VersionReg);
-                if (version != 0x00 && version != 0xFF) {
-                    failCount = 0;
-                    healthy = true;
-                }
+
+    if (isValidMfrc522Version(version)) {
+        failCount = 0;
+        healthyFlag = true;
+        return true;
+    }
+
+    failCount++;
+    Serial.printf("[RFID] %s version read 0x%02X (fail %u/%u)\n",
+                name, version, failCount, RFID_FAIL_THRESHOLD);
+
+    if (failCount >= RFID_FAIL_THRESHOLD) {
+        healthyFlag = false;
+        uint32_t now = millis();
+        if (now - lastReinit >= RFID_REINIT_COOLDOWN_MS) {
+            Serial.printf("[RFID] Re-init %s reader\n", name);
+            reader.PCD_Init();
+            lastReinit = now;
+            vTaskDelay(pdMS_TO_TICKS(RFID_INIT_DELAY_MS));
+            version = reader.PCD_ReadRegister(MFRC522::VersionReg);
+            if (isValidMfrc522Version(version)) {
+                failCount = 0;
+                healthyFlag = true;
+                Serial.printf("[RFID] %s recovered (version 0x%02X)\n", name, version);
+                return true;
             }
         }
-        healthyFlag = healthy;
-        return false;
     }
-    failCount = 0;
-    healthyFlag = true;
-    return true;
+    return false;
 }
 
 static bool readTagFromReader(MFRC522& reader, char* uidOut, size_t uidLen) {
@@ -91,6 +119,19 @@ static void classifyTag(TagEvent& evt) {
     }
 }
 
+static void runPeriodicHealthCheck() {
+    uint32_t now = millis();
+    if (now - lastHealthCheckMs < RFID_HEALTH_CHECK_INTERVAL_MS) return;
+    lastHealthCheckMs = now;
+
+    if (!lockSpi()) return;
+    probeReaderHealth(rfidEntrance, entranceHealthy, entranceFailCount,
+                      lastEntranceReinit, "entrance");
+    probeReaderHealth(rfidInside, insideHealthy, insideFailCount,
+                      lastInsideReinit, "inside");
+    unlockSpi();
+}
+
 static void rfidTask(void* param) {
     (void)param;
     char uid[24];
@@ -102,8 +143,16 @@ static void rfidTask(void* param) {
             xSemaphoreGive(enrollMutex);
         }
 
+        runPeriodicHealthCheck();
+
+        if (!lockSpi()) {
+            vTaskDelay(pdMS_TO_TICKS(RFID_POLL_INTERVAL_MS));
+            continue;
+        }
+
         if (enrolling) {
             if (entranceHealthy && readTagFromReader(rfidEntrance, uid, sizeof(uid))) {
+                unlockSpi();
                 if (xSemaphoreTake(enrollMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
                     strncpy(enrollmentUid, uid, sizeof(enrollmentUid) - 1);
                     enrollmentUid[sizeof(enrollmentUid) - 1] = '\0';
@@ -113,8 +162,7 @@ static void rfidTask(void* param) {
                     Serial.printf("[RFID] Enrollment tag: %s\n", uid);
                 }
             } else {
-                checkReaderHealth(rfidEntrance, entranceHealthy, entranceFailCount,
-                                  lastEntranceReinit, "entrance");
+                unlockSpi();
             }
             vTaskDelay(pdMS_TO_TICKS(RFID_POLL_INTERVAL_MS));
             continue;
@@ -127,16 +175,11 @@ static void rfidTask(void* param) {
 
         switch (state) {
             case STATE_IDLE:
-                pollEntrance = true;
-                break;
             case STATE_DOOR_ENTRY:
                 pollEntrance = true;
                 break;
             case STATE_WAITING_FOR_PRODUCT:
                 pollInside = true;
-                break;
-            case STATE_UV_ACTIVE:
-            case STATE_UV_DONE:
                 break;
             default:
                 break;
@@ -146,12 +189,10 @@ static void rfidTask(void* param) {
             if (readTagFromReader(rfidEntrance, uid, sizeof(uid))) {
                 TagEvent evt = {};
                 strncpy(evt.uid, uid, sizeof(evt.uid) - 1);
+                evt.uid[sizeof(evt.uid) - 1] = '\0';
                 evt.source = TAG_SOURCE_ENTRANCE;
                 classifyTag(evt);
                 xQueueSend(tagEventQueue, &evt, 0);
-            } else {
-                checkReaderHealth(rfidEntrance, entranceHealthy, entranceFailCount,
-                                  lastEntranceReinit, "entrance");
             }
         }
 
@@ -159,38 +200,54 @@ static void rfidTask(void* param) {
             if (readTagFromReader(rfidInside, uid, sizeof(uid))) {
                 TagEvent evt = {};
                 strncpy(evt.uid, uid, sizeof(evt.uid) - 1);
+                evt.uid[sizeof(evt.uid) - 1] = '\0';
                 evt.source = TAG_SOURCE_INSIDE;
                 classifyTag(evt);
                 xQueueSend(tagEventQueue, &evt, 0);
-            } else {
-                checkReaderHealth(rfidInside, insideHealthy, insideFailCount,
-                                  lastInsideReinit, "inside");
             }
         }
 
+        unlockSpi();
         vTaskDelay(pdMS_TO_TICKS(RFID_POLL_INTERVAL_MS));
     }
 }
 
 void rfidInit() {
     enrollMutex = xSemaphoreCreateMutex();
+    spiMutex = xSemaphoreCreateMutex();
     tagEventQueue = xQueueCreate(QUEUE_TAG_EVENTS, sizeof(TagEvent));
-    if (!enrollMutex || !tagEventQueue) {
+    if (!enrollMutex || !spiMutex || !tagEventQueue) {
         Serial.println("[RFID] Failed to create mutex/queue");
     }
 
-    SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI, PIN_ENTRANCE_RFID_SS);
-    rfidEntrance.PCD_Init();
-    rfidInside.PCD_Init();
+    // Dual MFRC522: deselect both chips, then init SPI without binding hardware CS
+    deselectAllReaders();
+    SPI.begin(PIN_SPI_SCK, PIN_SPI_MISO, PIN_SPI_MOSI);
+    delay(RFID_INIT_DELAY_MS);
 
-    checkReaderHealth(rfidEntrance, entranceHealthy, entranceFailCount,
-                      lastEntranceReinit, "entrance");
-    checkReaderHealth(rfidInside, insideHealthy, insideFailCount,
-                      lastInsideReinit, "inside");
+    if (lockSpi(portMAX_DELAY)) {
+        rfidEntrance.PCD_Init();
+        delay(RFID_INIT_DELAY_MS);
+        rfidInside.PCD_Init();
+        delay(RFID_INIT_DELAY_MS);
 
-    Serial.printf("[RFID] Entrance: %s, Inside: %s\n",
-                  entranceHealthy ? "OK" : "FAIL",
-                  insideHealthy ? "OK" : "FAIL");
+        byte verEnt = rfidEntrance.PCD_ReadRegister(MFRC522::VersionReg);
+        byte verIn  = rfidInside.PCD_ReadRegister(MFRC522::VersionReg);
+        entranceHealthy = isValidMfrc522Version(verEnt);
+        insideHealthy   = isValidMfrc522Version(verIn);
+        entranceFailCount = entranceHealthy ? 0 : 1;
+        insideFailCount   = insideHealthy ? 0 : 1;
+        unlockSpi();
+
+        Serial.printf("[RFID] Entrance version 0x%02X -> %s\n",
+                      verEnt, entranceHealthy ? "OK" : "FAIL");
+        Serial.printf("[RFID] Inside   version 0x%02X -> %s\n",
+                      verIn, insideHealthy ? "OK" : "FAIL");
+    } else {
+        Serial.println("[RFID] SPI mutex unavailable at init");
+    }
+
+    lastHealthCheckMs = millis();
 }
 
 void rfidStartTask() {

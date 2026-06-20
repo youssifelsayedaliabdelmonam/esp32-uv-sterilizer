@@ -77,8 +77,10 @@
 // RFID / SPI Failsafe
 // -----------------------------------------------------------------------------
 #define RFID_POLL_INTERVAL_MS       80
-#define RFID_FAIL_THRESHOLD         10
+#define RFID_FAIL_THRESHOLD         5
 #define RFID_REINIT_COOLDOWN_MS     3000
+#define RFID_INIT_DELAY_MS          50
+#define RFID_HEALTH_CHECK_INTERVAL_MS 3000
 #define RFID_SPI_SPEED_HZ           1000000
 
 // -----------------------------------------------------------------------------
