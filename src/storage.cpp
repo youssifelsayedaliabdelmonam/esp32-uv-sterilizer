@@ -445,6 +445,27 @@ bool Storage::loadLogs(std::vector<CycleLogEntry>& logs) {
     return ok;
 }
 
+bool Storage::factoryReset() {
+    if (!lockStorage(pdMS_TO_TICKS(STORAGE_MUTEX_TIMEOUT_MS))) return false;
+
+    StaticJsonDocument<256> usersDoc;
+    StaticJsonDocument<256> productsDoc;
+    StaticJsonDocument<256> logsDoc;
+    usersDoc.createNestedArray("users");
+    productsDoc.createNestedArray("products");
+    logsDoc.createNestedArray("logs");
+
+    bool ok = writeJsonFile(USERS_JSON_PATH, usersDoc)
+           && writeJsonFile(PRODUCTS_JSON_PATH, productsDoc)
+           && writeJsonFile(LOGS_JSON_PATH, logsDoc);
+    unlockStorage();
+
+    if (ok) {
+        Serial.println("[Storage] Factory reset: users, products, logs cleared");
+    }
+    return ok;
+}
+
 // -----------------------------------------------------------------------------
 // Tag conflict / reassignment
 // -----------------------------------------------------------------------------

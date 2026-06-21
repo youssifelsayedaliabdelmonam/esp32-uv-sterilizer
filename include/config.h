@@ -21,20 +21,42 @@
 #define PIN_LCD_SDA             21
 #define PIN_LCD_SCL             22
 
-// Relay outputs – GPIO32/33/16 are safe (no boot strap / JTAG glitches).
-// AVOID: GPIO12 (MTDI/flash voltage strap – blocks boot if pulled high),
-//        GPIO13/14 (JTAG), GPIO15 (strap), GPIO0/2/4/5 (strap or SPI).
+// Relay outputs – GPIO32/33/4 are safe (no boot strap / JTAG glitches).
+// AVOID: GPIO12 (MTDI – blocks boot), GPIO13/14 (JTAG), GPIO15/16 (strap/PSRAM).
 #define PIN_ENTRANCE_LOCK       32
 #define PIN_EXIT_LOCK           33
-#define PIN_UV_RELAY            16
+#define PIN_UV_RELAY            4
 #define PIN_BUZZER              27
 #define PIN_BOOT_BUTTON         0
 
-// Relay modules are ACTIVE LOW (IN low = relay ON). HIGH = relay OFF (safe at boot).
-#define LOCK_ACTIVE             LOW
-#define LOCK_INACTIVE           HIGH
-#define UV_ACTIVE               LOW
-#define UV_INACTIVE             HIGH
+// --- Relay module configuration (adjust if relays do not click) ---
+// Low-level trigger board (most common): IN=LOW energizes coil. Set to 0 for high-level trigger.
+#define RELAY_LOW_LEVEL_TRIGGER     1
+
+// 1 = coil energized when locked / UV on (typical fail-secure solenoid wiring)
+// 0 = GPIO HIGH when locked/UV on (original spec; coil OFF – needs NC contact wiring)
+#define RELAY_ENERGIZE_WHEN_ACTIVE  1
+
+#if RELAY_LOW_LEVEL_TRIGGER
+  #define RELAY_COIL_ON           LOW
+  #define RELAY_COIL_OFF          HIGH
+#else
+  #define RELAY_COIL_ON           HIGH
+  #define RELAY_COIL_OFF          LOW
+#endif
+
+#if RELAY_ENERGIZE_WHEN_ACTIVE
+  #define LOCK_ACTIVE             RELAY_COIL_ON
+  #define LOCK_INACTIVE           RELAY_COIL_OFF
+  #define UV_ACTIVE               RELAY_COIL_ON
+  #define UV_INACTIVE             RELAY_COIL_OFF
+#else
+  #define LOCK_ACTIVE             RELAY_COIL_OFF
+  #define LOCK_INACTIVE           RELAY_COIL_ON
+  #define UV_ACTIVE               RELAY_COIL_OFF
+  #define UV_INACTIVE             RELAY_COIL_ON
+#endif
+
 #define BUZZER_ACTIVE           HIGH
 #define BUZZER_INACTIVE         LOW
 

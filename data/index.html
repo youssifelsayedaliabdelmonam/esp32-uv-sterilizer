@@ -180,6 +180,17 @@ input[type="text"], input[type="number"], input[type="datetime-local"] {
   <p class="msg" id="productMsg"></p>
 </div>
 
+<div class="card">
+  <h2>Factory Reset</h2>
+  <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem">
+    Clears all user tags, product tags, and sterilization logs. UV duration and clock are kept.
+  </p>
+  <div class="row">
+    <button class="danger" onclick="factoryReset()">Factory Reset Data</button>
+  </div>
+  <p class="msg" id="factoryMsg"></p>
+</div>
+
 <div class="modal-overlay" id="conflictModal">
   <div class="modal">
     <h3>Tag Conflict</h3>
@@ -215,6 +226,10 @@ function setMsg(id, text, ok) {
   const el = document.getElementById(id);
   el.textContent = text;
   el.className = 'msg ' + (ok ? 'ok' : 'err');
+}
+
+function escAttr(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
 }
 
 function rfidBadge(ok, version) {
@@ -339,7 +354,7 @@ async function loadUsers() {
     (data.users || []).forEach(u => {
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${esc(u.uid)}</td><td>${esc(u.name || '')}</td>
-        <td><button class="danger" onclick="deleteUser(${JSON.stringify(u.uid)})">Delete</button></td>`;
+        <td><button type="button" class="danger btn-del-user" data-uid="${escAttr(u.uid)}">Delete</button></td>`;
       tbody.appendChild(tr);
     });
     setMsg('userMsg', (data.users || []).length + ' user(s)', true);
@@ -356,7 +371,7 @@ async function loadProducts() {
     (data.products || []).forEach(p => {
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${esc(p.uid)}</td><td>${esc(p.name || '')}</td>
-        <td><button class="danger" onclick="deleteProduct(${JSON.stringify(p.uid)})">Delete</button></td>`;
+        <td><button type="button" class="danger btn-del-product" data-uid="${escAttr(p.uid)}">Delete</button></td>`;
       tbody.appendChild(tr);
     });
     setMsg('productMsg', (data.products || []).length + ' product(s)', true);
@@ -473,6 +488,34 @@ async function deleteProduct(uid) {
     setMsg('productMsg', e.message, false);
   }
 }
+
+async function factoryReset() {
+  if (!confirm('Delete ALL user tags, product tags, and logs? This cannot be undone.')) return;
+  if (!confirm('Are you sure? All tag and log data will be permanently erased.')) return;
+  try {
+    await api('/api/factory_reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true })
+    });
+    setMsg('factoryMsg', 'Factory reset complete', true);
+    loadUsers();
+    loadProducts();
+    loadLogs();
+  } catch (e) {
+    setMsg('factoryMsg', e.message, false);
+  }
+}
+
+document.getElementById('usersTable').addEventListener('click', e => {
+  const btn = e.target.closest('.btn-del-user');
+  if (btn) deleteUser(btn.getAttribute('data-uid'));
+});
+
+document.getElementById('productsTable').addEventListener('click', e => {
+  const btn = e.target.closest('.btn-del-product');
+  if (btn) deleteProduct(btn.getAttribute('data-uid'));
+});
 
 async function saveSettings() {
   const dur = parseInt(document.getElementById('uvDuration').value, 10);

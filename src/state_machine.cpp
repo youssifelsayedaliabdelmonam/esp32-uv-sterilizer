@@ -18,19 +18,27 @@ static void unlockStatus() {
     if (statusMutex) xSemaphoreGive(statusMutex);
 }
 
-// Relay helpers – active HIGH (caller must hold statusMutex when updating currentStatus)
+// Relay helpers – caller must hold statusMutex when updating currentStatus
+static void driveRelayPin(uint8_t pin, uint8_t level, const char* label) {
+    digitalWrite(pin, level);
+    Serial.printf("[Relay] %s GPIO%d -> %s\n", label, pin, level == HIGH ? "HIGH" : "LOW");
+}
+
 static void setEntranceLock(bool locked) {
-    digitalWrite(PIN_ENTRANCE_LOCK, locked ? LOCK_ACTIVE : LOCK_INACTIVE);
+    driveRelayPin(PIN_ENTRANCE_LOCK, locked ? LOCK_ACTIVE : LOCK_INACTIVE,
+                  locked ? "Entrance LOCK" : "Entrance UNLOCK");
     currentStatus.entranceLocked = locked;
 }
 
 static void setExitLock(bool locked) {
-    digitalWrite(PIN_EXIT_LOCK, locked ? LOCK_ACTIVE : LOCK_INACTIVE);
+    driveRelayPin(PIN_EXIT_LOCK, locked ? LOCK_ACTIVE : LOCK_INACTIVE,
+                  locked ? "Exit LOCK" : "Exit UNLOCK");
     currentStatus.exitLocked = locked;
 }
 
 static void setUvLamp(bool on) {
-    digitalWrite(PIN_UV_RELAY, on ? UV_ACTIVE : UV_INACTIVE);
+    driveRelayPin(PIN_UV_RELAY, on ? UV_ACTIVE : UV_INACTIVE,
+                  on ? "UV ON" : "UV OFF");
     currentStatus.uvLampOn = on;
 }
 
@@ -44,14 +52,16 @@ static void unlockBothDoors() {
     setExitLock(false);
 }
 
-// Call as the first action in setup() – drives relay OFF (HIGH) before anything else
+// Call as the first action in setup() – all coils OFF before anything else
 void relaysSafeBootInit() {
     pinMode(PIN_ENTRANCE_LOCK, OUTPUT);
     pinMode(PIN_EXIT_LOCK, OUTPUT);
     pinMode(PIN_UV_RELAY, OUTPUT);
-    digitalWrite(PIN_ENTRANCE_LOCK, LOCK_INACTIVE);
-    digitalWrite(PIN_EXIT_LOCK, LOCK_INACTIVE);
-    digitalWrite(PIN_UV_RELAY, UV_INACTIVE);
+    digitalWrite(PIN_ENTRANCE_LOCK, RELAY_COIL_OFF);
+    digitalWrite(PIN_EXIT_LOCK, RELAY_COIL_OFF);
+    digitalWrite(PIN_UV_RELAY, RELAY_COIL_OFF);
+    Serial.printf("[Relay] Boot safe: coils OFF on GPIO %d, %d, %d\n",
+                  PIN_ENTRANCE_LOCK, PIN_EXIT_LOCK, PIN_UV_RELAY);
 }
 
 static void publishStatus() {

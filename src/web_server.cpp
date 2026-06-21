@@ -392,6 +392,31 @@ static void handleApStop() {
     sendJson(200, "{\"success\":true,\"message\":\"AP stopped\"}");
 }
 
+static void handleFactoryReset() {
+    if (!server.hasArg("plain")) {
+        sendError(400, "Missing JSON body");
+        return;
+    }
+    StaticJsonDocument<128> doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+        sendError(400, "Invalid JSON");
+        return;
+    }
+    if (!doc["confirm"] | false) {
+        sendError(400, "confirm:true required");
+        return;
+    }
+    if (!storage.factoryReset()) {
+        sendError(500, "Factory reset failed");
+        return;
+    }
+    sendJson(200, "{\"success\":true,\"message\":\"Users, products, and logs cleared\"}");
+}
+
+static void handleNotFound() {
+    sendError(404, "Not found");
+}
+
 static void handlePostSettings() {
     if (!server.hasArg("plain")) {
         sendError(400, "Missing JSON body");
@@ -418,10 +443,6 @@ static void handlePostSettings() {
     sendJson(200, "{\"success\":true}");
 }
 
-static void handleNotFound() {
-    sendError(404, "Not found");
-}
-
 static void setupRoutes() {
     server.on("/", HTTP_GET, handleRoot);
     server.on("/api/status", HTTP_GET, handleStatus);
@@ -439,6 +460,7 @@ static void setupRoutes() {
     server.on("/api/time", HTTP_GET, handleGetTime);
     server.on("/api/time", HTTP_POST, handlePostTime);
     server.on("/api/ap/stop", HTTP_POST, handleApStop);
+    server.on("/api/factory_reset", HTTP_POST, handleFactoryReset);
     server.on("/api/settings", HTTP_POST, handlePostSettings);
     server.onNotFound(handleNotFound);
 }

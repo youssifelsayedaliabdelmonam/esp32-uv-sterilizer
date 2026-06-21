@@ -71,6 +71,9 @@ public:
     bool appendLog(const char* userUid, const char* productUid);
     bool loadLogs(std::vector<CycleLogEntry>& logs);
 
+    // Factory reset – clears users, products, and logs (not UV duration or clock)
+    bool factoryReset();
+
     // Tag conflict / reassignment
     TagConflictType checkTagConflict(const String& uid, StorageTagType enrollingAs);
     bool reassignTag(const String& uid, StorageTagType newType, const String& name = "");
