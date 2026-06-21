@@ -47,6 +47,9 @@ static void buttonTask(void* param) {
 }
 
 void setup() {
+    // Keep active-low relays OFF (HIGH) before any other peripheral init
+    relaysSafeBootInit();
+
     Serial.begin(115200);
     Serial.println();
     Serial.println("=== UV Sterilization Room Controller ===");

@@ -7,6 +7,7 @@
 #include "system_types.h"
 
 void stateMachineInit();
+void relaysSafeBootInit();
 void stateMachineStartTask();
 SystemState stateMachineGetState();
 void stateMachineGetStatus(SystemStatus& out);

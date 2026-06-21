@@ -44,6 +44,16 @@ static void unlockBothDoors() {
     setExitLock(false);
 }
 
+// Call as the first action in setup() – drives relay OFF (HIGH) before anything else
+void relaysSafeBootInit() {
+    pinMode(PIN_ENTRANCE_LOCK, OUTPUT);
+    pinMode(PIN_EXIT_LOCK, OUTPUT);
+    pinMode(PIN_UV_RELAY, OUTPUT);
+    digitalWrite(PIN_ENTRANCE_LOCK, LOCK_INACTIVE);
+    digitalWrite(PIN_EXIT_LOCK, LOCK_INACTIVE);
+    digitalWrite(PIN_UV_RELAY, UV_INACTIVE);
+}
+
 static void publishStatus() {
     SystemStatus snapshot;
     if (!lockStatus()) return;
@@ -228,10 +238,7 @@ static void stateMachineTask(void* param) {
 void stateMachineInit() {
     statusMutex = xSemaphoreCreateMutex();
 
-    pinMode(PIN_ENTRANCE_LOCK, OUTPUT);
-    pinMode(PIN_EXIT_LOCK, OUTPUT);
-    pinMode(PIN_UV_RELAY, OUTPUT);
-
+    // Relays already safe from relaysSafeBootInit(); enforce locked + UV off
     memset(&currentStatus, 0, sizeof(currentStatus));
     currentStatus.state = STATE_IDLE;
     currentStatus.entranceLocked = true;

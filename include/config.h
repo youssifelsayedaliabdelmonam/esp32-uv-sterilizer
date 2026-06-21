@@ -21,17 +21,20 @@
 #define PIN_LCD_SDA             21
 #define PIN_LCD_SCL             22
 
-#define PIN_ENTRANCE_LOCK       14
-#define PIN_EXIT_LOCK           12
-#define PIN_UV_RELAY            13
+// Relay outputs – GPIO32/33/16 are safe (no boot strap / JTAG glitches).
+// AVOID: GPIO12 (MTDI/flash voltage strap – blocks boot if pulled high),
+//        GPIO13/14 (JTAG), GPIO15 (strap), GPIO0/2/4/5 (strap or SPI).
+#define PIN_ENTRANCE_LOCK       32
+#define PIN_EXIT_LOCK           33
+#define PIN_UV_RELAY            16
 #define PIN_BUZZER              27
 #define PIN_BOOT_BUTTON         0
 
-// Relay polarity: HIGH = active (lock engaged / UV on / buzzer on)
-#define LOCK_ACTIVE             HIGH
-#define LOCK_INACTIVE           LOW
-#define UV_ACTIVE               HIGH
-#define UV_INACTIVE             LOW
+// Relay modules are ACTIVE LOW (IN low = relay ON). HIGH = relay OFF (safe at boot).
+#define LOCK_ACTIVE             LOW
+#define LOCK_INACTIVE           HIGH
+#define UV_ACTIVE               LOW
+#define UV_INACTIVE             HIGH
 #define BUZZER_ACTIVE           HIGH
 #define BUZZER_INACTIVE         LOW
 
