@@ -109,7 +109,11 @@ static void transitionTo(SystemState newState) {
             break;
 
         case STATE_DOOR_ENTRY:
-            doorEntryLastUid[0] = '\0';
+            if (currentStatus.lastUserUid[0] != '\0') {
+                strncpy(doorEntryLastUid, currentStatus.lastUserUid, sizeof(doorEntryLastUid) - 1);
+                doorEntryLastUid[sizeof(doorEntryLastUid) - 1] = '\0';
+                doorEntryLastScanMs = stateEnterMs;
+            }
             setEntranceLock(false);
             setExitLock(true);
             currentStatus.stateTimeoutRemainingMs = ENTRY_TIMEOUT_MS;
@@ -139,6 +143,27 @@ static void transitionTo(SystemState newState) {
             storage.queueCycleLog(currentStatus.lastUserUid, currentStatus.lastProductUid);
             break;
     }
+    rfidResetScanCooldown();
+}
+
+// Caller must hold statusMutex – cancel cycle and open entrance so occupant can exit
+static void cancelCycleToIdle(const char* reason) {
+    SystemState fromState = currentStatus.state;
+    currentStatus.state = STATE_IDLE;
+    stateEnterMs = millis();
+    Serial.printf("[State] %s -> IDLE (exit assist)\n", systemStateName(fromState));
+
+    clearCycleSession();
+    setUvLamp(false);
+    doorEntryLastUid[0] = '\0';
+    idleExitAssist = true;
+    setEntranceLock(false);
+    setExitLock(true);
+    currentStatus.uvTimeRemainingSec = 0;
+    currentStatus.stateTimeoutRemainingMs = ENTRY_TIMEOUT_MS;
+    buzzerRequest(BEEP_SINGLE_SHORT);
+    Serial.printf("[State] %s – entrance open to exit\n", reason);
+    rfidResetScanCooldown();
 }
 
 // Caller must hold statusMutex
@@ -166,26 +191,18 @@ static void setLastProduct(const char* uid) {
     currentStatus.lastProductName[sizeof(currentStatus.lastProductName) - 1] = '\0';
 }
 
-// Caller must hold statusMutex – cancel cycle and open entrance so an occupant can exit
-static void cancelCycleToIdle(const char* reason) {
-    transitionTo(STATE_IDLE);
-    idleExitAssist = true;
-    setEntranceLock(false);
-    setExitLock(true);
-    stateEnterMs = millis();
-    currentStatus.stateTimeoutRemainingMs = ENTRY_TIMEOUT_MS;
-    Serial.printf("[State] %s – entrance open to exit\n", reason);
-}
-
 // Caller must hold statusMutex
 static void handleTagEvent(const TagEvent& evt) {
     switch (currentStatus.state) {
         case STATE_IDLE:
-            if (evt.source == TAG_SOURCE_ENTRANCE && evt.isUser) {
+            if (evt.isUser &&
+                (evt.source == TAG_SOURCE_ENTRANCE ||
+                 (idleExitAssist && evt.source == TAG_SOURCE_INSIDE))) {
                 idleExitAssist = false;
                 setLastUser(evt.uid);
                 transitionTo(STATE_DOOR_ENTRY);
-            } else if (evt.source == TAG_SOURCE_ENTRANCE) {
+            } else if (evt.source == TAG_SOURCE_ENTRANCE ||
+                       (idleExitAssist && evt.source == TAG_SOURCE_INSIDE)) {
                 buzzerRequest(BEEP_ERROR);
             }
             break;
@@ -193,9 +210,11 @@ static void handleTagEvent(const TagEvent& evt) {
         case STATE_DOOR_ENTRY:
             if (evt.source == TAG_SOURCE_ENTRANCE && evt.isUser) {
                 uint32_t now = millis();
+                uint32_t sinceLast = now - doorEntryLastScanMs;
                 if (doorEntryLastUid[0] != '\0' &&
                     strcmp(doorEntryLastUid, evt.uid) == 0 &&
-                    (now - doorEntryLastScanMs) < ENTRY_CANCEL_DOUBLE_SCAN_MS) {
+                    sinceLast >= ENTRY_CANCEL_MIN_GAP_MS &&
+                    sinceLast < ENTRY_CANCEL_DOUBLE_SCAN_MS) {
                     doorEntryLastUid[0] = '\0';
                     transitionTo(STATE_IDLE);
                     Serial.println("[State] Entry cancelled by user tag");
@@ -205,7 +224,7 @@ static void handleTagEvent(const TagEvent& evt) {
                 doorEntryLastUid[sizeof(doorEntryLastUid) - 1] = '\0';
                 doorEntryLastScanMs = now;
                 setLastUser(evt.uid);
-                stateEnterMs = millis();
+                stateEnterMs = now;
                 currentStatus.stateTimeoutRemainingMs = ENTRY_TIMEOUT_MS;
                 buzzerRequest(BEEP_SINGLE_SHORT);
             } else if (evt.source == TAG_SOURCE_INSIDE && evt.isProduct) {
@@ -281,11 +300,12 @@ static void updateTimeouts() {
             break;
 
         case STATE_IDLE:
-            if (idleExitAssist) {
+                if (idleExitAssist) {
                 if ((int32_t)(now - stateEnterMs) >= (int32_t)ENTRY_TIMEOUT_MS) {
                     idleExitAssist = false;
                     setEntranceLock(true);
                     currentStatus.stateTimeoutRemainingMs = 0;
+                    rfidResetScanCooldown();
                     Serial.println("[State] Exit assist ended – fully idle");
                 } else {
                     currentStatus.stateTimeoutRemainingMs =
@@ -367,6 +387,15 @@ void stateMachineGetStatus(SystemStatus& out) {
     } else {
         out = currentStatus;
     }
+}
+
+bool stateMachineIsIdleExitAssist() {
+    if (lockStatus(pdMS_TO_TICKS(20))) {
+        bool assist = idleExitAssist;
+        unlockStatus();
+        return assist;
+    }
+    return idleExitAssist;
 }
 
 bool stateMachineIsWebServerAllowed() {

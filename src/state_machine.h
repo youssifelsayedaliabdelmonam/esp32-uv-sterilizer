@@ -11,6 +11,7 @@ void relaysSafeBootInit();
 void stateMachineStartTask();
 SystemState stateMachineGetState();
 void stateMachineGetStatus(SystemStatus& out);
+bool stateMachineIsIdleExitAssist();
 bool stateMachineIsWebServerAllowed();
 void stateMachineSetWebInfo(bool active, const char* ip);
 

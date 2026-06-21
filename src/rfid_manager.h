@@ -21,5 +21,6 @@ bool rfidEntranceHealthy();
 bool rfidInsideHealthy();
 uint8_t rfidEntranceVersion();
 uint8_t rfidInsideVersion();
+void rfidResetScanCooldown();
 
 #endif // RFID_MANAGER_H

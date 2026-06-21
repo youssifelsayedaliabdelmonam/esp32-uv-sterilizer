@@ -84,6 +84,11 @@
 
 // During door entry: scan the same user tag twice within this window to cancel → IDLE.
 #define ENTRY_CANCEL_DOUBLE_SCAN_MS     3000    // 3 seconds
+// Minimum gap between entry scan and cancel scan (prevents instant cancel on same tap).
+#define ENTRY_CANCEL_MIN_GAP_MS         800     // 0.8 seconds
+
+// Ignore duplicate UID dispatches within this window (same state).
+#define TAG_SCAN_COOLDOWN_MS            1200    // 1.2 seconds
 
 // -----------------------------------------------------------------------------
 // Other timing

@@ -126,7 +126,7 @@ static void lcdTask(void* param) {
             snprintf(line, sizeof(line), "UV lamp ON %lus",
                      (unsigned long)st.uvTimeRemainingSec);
         } else if (st.state == STATE_DOOR_ENTRY) {
-            snprintf(line, sizeof(line), "2x user = cancel");
+            snprintf(line, sizeof(line), "Scan again=cancel");
         } else if (st.state == STATE_UV_DONE) {
             snprintf(line, sizeof(line), "Exit closes %lus",
                      (unsigned long)timeoutSec(st));

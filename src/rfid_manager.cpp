@@ -33,6 +33,51 @@ static uint32_t lastEntranceReinit = 0;
 static uint32_t lastInsideReinit = 0;
 static uint32_t lastHealthCheckMs = 0;
 
+// Debounce duplicate tag dispatches (MFRC522 may see same card repeatedly without HaltA)
+static char lastDispatchedUid[24] = {};
+static uint32_t lastDispatchedMs = 0;
+static SystemState lastDispatchedState = STATE_IDLE;
+
+void rfidResetScanCooldown() {
+    lastDispatchedUid[0] = '\0';
+    lastDispatchedMs = 0;
+}
+
+static bool shouldDispatchTag(const char* uid, SystemState state) {
+    uint32_t now = millis();
+    if (state != lastDispatchedState) {
+        lastDispatchedState = state;
+        strncpy(lastDispatchedUid, uid, sizeof(lastDispatchedUid) - 1);
+        lastDispatchedUid[sizeof(lastDispatchedUid) - 1] = '\0';
+        lastDispatchedMs = now;
+        return true;
+    }
+    if (lastDispatchedUid[0] != '\0' && strcmp(lastDispatchedUid, uid) == 0 &&
+        (int32_t)(now - lastDispatchedMs) < (int32_t)TAG_SCAN_COOLDOWN_MS) {
+        return false;
+    }
+    strncpy(lastDispatchedUid, uid, sizeof(lastDispatchedUid) - 1);
+    lastDispatchedUid[sizeof(lastDispatchedUid) - 1] = '\0';
+    lastDispatchedMs = now;
+    return true;
+}
+
+static bool dispatchTagEvent(const TagEvent& evt, SystemState state) {
+    if (!shouldDispatchTag(evt.uid, state)) {
+        return false;
+    }
+    if (xQueueSend(tagEventQueue, &evt, pdMS_TO_TICKS(100)) != pdTRUE) {
+        Serial.println("[RFID] Tag queue full – event dropped");
+        return false;
+    }
+    Serial.printf("[RFID] Queued %s src=%s user=%d prod=%d state=%s\n",
+                  evt.uid,
+                  evt.source == TAG_SOURCE_ENTRANCE ? "entrance" : "inside",
+                  evt.isUser, evt.isProduct,
+                  systemStateName(state));
+    return true;
+}
+
 // Any response other than bus-floating values means the chip is responding
 static bool isValidMfrc522Version(byte version) {
     return version != 0x00 && version != 0xFF;
@@ -137,14 +182,16 @@ static bool probeReaderHealth(MFRC522& reader, volatile bool& healthyFlag,
     return false;
 }
 
-static bool readTagFromReader(MFRC522& reader, char* uidOut, size_t uidLen) {
+static bool readTagFromReader(MFRC522& reader, char* uidOut, size_t uidLen, bool haltCard) {
     deselectAllReaders();
     delayMicroseconds(50);
     if (!reader.PICC_IsNewCardPresent()) return false;
     if (!reader.PICC_ReadCardSerial()) return false;
     formatUid(reader.uid, uidOut, uidLen);
-    reader.PICC_HaltA();
-    reader.PCD_StopCrypto1();
+    if (haltCard) {
+        reader.PICC_HaltA();
+        reader.PCD_StopCrypto1();
+    }
     return uidOut[0] != '\0';
 }
 
@@ -204,7 +251,7 @@ static void rfidTask(void* param) {
 
         if (enrolling) {
             bool gotEnrollTag = false;
-            if (entranceHealthy && readTagFromReader(rfidEntrance, uid, sizeof(uid))) {
+            if (entranceHealthy && readTagFromReader(rfidEntrance, uid, sizeof(uid), true)) {
                 strncpy(evt.uid, uid, sizeof(evt.uid) - 1);
                 evt.uid[sizeof(evt.uid) - 1] = '\0';
                 gotEnrollTag = true;
@@ -224,12 +271,14 @@ static void rfidTask(void* param) {
         }
 
         SystemState state = stateMachineGetState();
+        bool idleAssist = stateMachineIsIdleExitAssist();
         bool pollEntranceCycle = (state == STATE_IDLE || state == STATE_DOOR_ENTRY);
         bool pollEntranceUserAbort = (state == STATE_WAITING_FOR_PRODUCT || state == STATE_UV_DONE);
-        bool pollInside = (state == STATE_WAITING_FOR_PRODUCT || state == STATE_UV_DONE);
+        bool pollInside = (state == STATE_WAITING_FOR_PRODUCT || state == STATE_UV_DONE
+                           || (state == STATE_IDLE && idleAssist));
         bool gotEntranceTag = false;
 
-        if (entranceHealthy && readTagFromReader(rfidEntrance, uid, sizeof(uid))) {
+        if (entranceHealthy && readTagFromReader(rfidEntrance, uid, sizeof(uid), false)) {
             strncpy(evt.uid, uid, sizeof(evt.uid) - 1);
             evt.uid[sizeof(evt.uid) - 1] = '\0';
             evt.source = TAG_SOURCE_ENTRANCE;
@@ -257,16 +306,18 @@ static void rfidTask(void* param) {
             }
             unlockSpi();
             if (sendToStateMachine) {
-                xQueueSend(tagEventQueue, &evt, 0);
+                dispatchTagEvent(evt, state);
             }
         } else if (pollInside && insideHealthy) {
-            if (readTagFromReader(rfidInside, uid, sizeof(uid))) {
+            if (readTagFromReader(rfidInside, uid, sizeof(uid), false)) {
                 strncpy(evt.uid, uid, sizeof(evt.uid) - 1);
                 evt.uid[sizeof(evt.uid) - 1] = '\0';
                 evt.source = TAG_SOURCE_INSIDE;
                 classifyTag(evt);
                 bool sendToStateMachine = false;
-                if (state == STATE_WAITING_FOR_PRODUCT && (evt.isUser || evt.isProduct)) {
+                if (state == STATE_IDLE && idleAssist && evt.isUser) {
+                    sendToStateMachine = true;
+                } else if (state == STATE_WAITING_FOR_PRODUCT && (evt.isUser || evt.isProduct)) {
                     sendToStateMachine = true;
                 } else if (state == STATE_UV_DONE && evt.isUser) {
                     sendToStateMachine = true;
@@ -275,7 +326,7 @@ static void rfidTask(void* param) {
                 }
                 unlockSpi();
                 if (sendToStateMachine) {
-                    xQueueSend(tagEventQueue, &evt, 0);
+                    dispatchTagEvent(evt, state);
                 }
             } else {
                 unlockSpi();
