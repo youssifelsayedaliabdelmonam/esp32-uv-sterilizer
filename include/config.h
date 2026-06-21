@@ -69,11 +69,25 @@
 #define LCD_UPDATE_INTERVAL_MS  300
 
 // -----------------------------------------------------------------------------
-// Timing (milliseconds)
+// Cycle timeouts (milliseconds) – edit here to tune door / product / exit timing
 // -----------------------------------------------------------------------------
-#define ENTRY_TIMEOUT_MS        10000
-#define EXIT_TIMEOUT_MS         30000
-#define WAITING_TIMEOUT_MS      900000  // 15 min – auto-cancel if no product scanned
+// Entrance door stays open this long after a user tag scan (then locks for product wait).
+#define ENTRY_TIMEOUT_MS                10000   // 10 seconds
+
+// Max time to scan a product tag inside the room. After this, system returns to IDLE.
+// Scan a user tag at the entrance anytime to cancel sooner. Set to 0 to disable auto-cancel.
+#define PRODUCT_WAIT_TIMEOUT_MS         900000  // 15 minutes (900000 ms)
+
+// Exit door stays open this long after UV finishes (then both doors lock → IDLE).
+// Scan a user tag at the entrance to finish sooner.
+#define EXIT_TIMEOUT_MS                 30000   // 30 seconds
+
+// During door entry: scan the same user tag twice within this window to cancel → IDLE.
+#define ENTRY_CANCEL_DOUBLE_SCAN_MS     3000    // 3 seconds
+
+// -----------------------------------------------------------------------------
+// Other timing
+// -----------------------------------------------------------------------------
 #define ENROLLMENT_TIMEOUT_MS   15000
 #define LONG_PRESS_DURATION_MS  5000
 #define BOOT_DEBOUNCE_MS        50

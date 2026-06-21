@@ -116,7 +116,7 @@ static void transitionTo(SystemState newState) {
 
         case STATE_WAITING_FOR_PRODUCT:
             lockBothDoors();
-            currentStatus.stateTimeoutRemainingMs = 0;
+            currentStatus.stateTimeoutRemainingMs = PRODUCT_WAIT_TIMEOUT_MS;
             break;
 
         case STATE_UV_ACTIVE: {
@@ -181,7 +181,7 @@ static void handleTagEvent(const TagEvent& evt) {
                 uint32_t now = millis();
                 if (doorEntryLastUid[0] != '\0' &&
                     strcmp(doorEntryLastUid, evt.uid) == 0 &&
-                    (now - doorEntryLastScanMs) < 3000) {
+                    (now - doorEntryLastScanMs) < ENTRY_CANCEL_DOUBLE_SCAN_MS) {
                     doorEntryLastUid[0] = '\0';
                     transitionTo(STATE_IDLE);
                     Serial.println("[State] Entry cancelled by user tag");
@@ -231,7 +231,7 @@ static void updateTimeouts() {
 
     switch (currentStatus.state) {
         case STATE_DOOR_ENTRY:
-            if (now - stateEnterMs >= ENTRY_TIMEOUT_MS) {
+            if ((int32_t)(now - stateEnterMs) >= (int32_t)ENTRY_TIMEOUT_MS) {
                 transitionTo(STATE_WAITING_FOR_PRODUCT);
             } else {
                 currentStatus.stateTimeoutRemainingMs = ENTRY_TIMEOUT_MS - (now - stateEnterMs);
@@ -239,9 +239,14 @@ static void updateTimeouts() {
             break;
 
         case STATE_WAITING_FOR_PRODUCT:
-            if ((int32_t)(now - stateEnterMs) >= (int32_t)WAITING_TIMEOUT_MS) {
-                transitionTo(STATE_IDLE);
-                Serial.println("[State] Waiting timeout – returning to idle");
+            if (PRODUCT_WAIT_TIMEOUT_MS > 0) {
+                if ((int32_t)(now - stateEnterMs) >= (int32_t)PRODUCT_WAIT_TIMEOUT_MS) {
+                    transitionTo(STATE_IDLE);
+                    Serial.println("[State] Product wait timeout – returning to idle");
+                } else {
+                    currentStatus.stateTimeoutRemainingMs =
+                        PRODUCT_WAIT_TIMEOUT_MS - (now - stateEnterMs);
+                }
             }
             break;
 

@@ -53,10 +53,13 @@ static void handleRoot() {
 static void handleStatus() {
     SystemStatus st;
     stateMachineGetStatus(st);
-    StaticJsonDocument<512> doc;
+    StaticJsonDocument<640> doc;
     doc["state"] = systemStateName(st.state);
     doc["uv_time_remaining"] = st.uvTimeRemainingSec;
     doc["state_timeout_remaining_ms"] = st.stateTimeoutRemainingMs;
+    doc["entry_timeout_ms"] = ENTRY_TIMEOUT_MS;
+    doc["product_wait_timeout_ms"] = PRODUCT_WAIT_TIMEOUT_MS;
+    doc["exit_timeout_ms"] = EXIT_TIMEOUT_MS;
     doc["entrance_locked"] = st.entranceLocked;
     doc["exit_locked"] = st.exitLocked;
     doc["uv_lamp_on"] = st.uvLampOn;

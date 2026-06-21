@@ -63,7 +63,12 @@ static void lcdTask(void* param) {
                          (unsigned long)timeoutSec(st));
                 break;
             case STATE_WAITING_FOR_PRODUCT:
-                snprintf(line, sizeof(line), "Scan product tag");
+                if (st.stateTimeoutRemainingMs > 0) {
+                    snprintf(line, sizeof(line), "Product: %lus left",
+                             (unsigned long)timeoutSec(st));
+                } else {
+                    snprintf(line, sizeof(line), "Scan product tag");
+                }
                 break;
             case STATE_UV_ACTIVE:
                 snprintf(line, sizeof(line), "UV: %lus remaining",
