@@ -9,6 +9,8 @@ static SystemStatus currentStatus = {};
 static SemaphoreHandle_t statusMutex = nullptr;
 static uint32_t stateEnterMs = 0;
 static uint32_t uvEndMs = 0;
+static char doorEntryLastUid[24] = {};
+static uint32_t doorEntryLastScanMs = 0;
 
 static bool lockStatus(TickType_t timeout = pdMS_TO_TICKS(50)) {
     return statusMutex && xSemaphoreTake(statusMutex, timeout) == pdTRUE;
@@ -97,13 +99,15 @@ static void transitionTo(SystemState newState) {
             clearCycleSession();
             currentStatus.stateTimeoutRemainingMs = 0;
             currentStatus.uvTimeRemainingSec = 0;
-            if (fromState == STATE_UV_DONE) {
+            if (fromState == STATE_UV_DONE || fromState == STATE_WAITING_FOR_PRODUCT) {
                 buzzerRequest(BEEP_SINGLE_SHORT);
                 Serial.println("[State] Ready for next entry – scan user tag at entrance");
             }
+            doorEntryLastUid[0] = '\0';
             break;
 
         case STATE_DOOR_ENTRY:
+            doorEntryLastUid[0] = '\0';
             setEntranceLock(false);
             setExitLock(true);
             currentStatus.stateTimeoutRemainingMs = ENTRY_TIMEOUT_MS;
@@ -174,6 +178,18 @@ static void handleTagEvent(const TagEvent& evt) {
 
         case STATE_DOOR_ENTRY:
             if (evt.source == TAG_SOURCE_ENTRANCE && evt.isUser) {
+                uint32_t now = millis();
+                if (doorEntryLastUid[0] != '\0' &&
+                    strcmp(doorEntryLastUid, evt.uid) == 0 &&
+                    (now - doorEntryLastScanMs) < 3000) {
+                    doorEntryLastUid[0] = '\0';
+                    transitionTo(STATE_IDLE);
+                    Serial.println("[State] Entry cancelled by user tag");
+                    break;
+                }
+                strncpy(doorEntryLastUid, evt.uid, sizeof(doorEntryLastUid) - 1);
+                doorEntryLastUid[sizeof(doorEntryLastUid) - 1] = '\0';
+                doorEntryLastScanMs = now;
                 setLastUser(evt.uid);
                 stateEnterMs = millis();
                 currentStatus.stateTimeoutRemainingMs = ENTRY_TIMEOUT_MS;
@@ -186,7 +202,10 @@ static void handleTagEvent(const TagEvent& evt) {
             break;
 
         case STATE_WAITING_FOR_PRODUCT:
-            if (evt.source == TAG_SOURCE_INSIDE && evt.isProduct) {
+            if (evt.source == TAG_SOURCE_ENTRANCE && evt.isUser) {
+                transitionTo(STATE_IDLE);
+                Serial.println("[State] Cycle cancelled – no product scanned");
+            } else if (evt.source == TAG_SOURCE_INSIDE && evt.isProduct) {
                 setLastProduct(evt.uid);
                 transitionTo(STATE_UV_ACTIVE);
             } else if (evt.source == TAG_SOURCE_INSIDE) {
@@ -198,6 +217,10 @@ static void handleTagEvent(const TagEvent& evt) {
             break;
 
         case STATE_UV_DONE:
+            if (evt.source == TAG_SOURCE_ENTRANCE && evt.isUser) {
+                transitionTo(STATE_IDLE);
+                Serial.println("[State] Exit complete – returning to idle");
+            }
             break;
     }
 }
@@ -215,6 +238,13 @@ static void updateTimeouts() {
             }
             break;
 
+        case STATE_WAITING_FOR_PRODUCT:
+            if ((int32_t)(now - stateEnterMs) >= (int32_t)WAITING_TIMEOUT_MS) {
+                transitionTo(STATE_IDLE);
+                Serial.println("[State] Waiting timeout – returning to idle");
+            }
+            break;
+
         case STATE_UV_ACTIVE:
             if ((int32_t)(now - uvEndMs) >= 0) {
                 transitionTo(STATE_UV_DONE);
@@ -224,8 +254,9 @@ static void updateTimeouts() {
             break;
 
         case STATE_UV_DONE:
-            if (now - stateEnterMs >= EXIT_TIMEOUT_MS) {
+            if ((int32_t)(now - stateEnterMs) >= (int32_t)EXIT_TIMEOUT_MS) {
                 transitionTo(STATE_IDLE);
+                Serial.println("[State] Exit window ended – returning to idle");
             } else {
                 currentStatus.stateTimeoutRemainingMs = EXIT_TIMEOUT_MS - (now - stateEnterMs);
             }

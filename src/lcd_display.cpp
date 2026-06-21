@@ -99,9 +99,9 @@ static void lcdTask(void* param) {
         if (prod) {
             snprintf(line, sizeof(line), "Prod: %.13s", prod);
         } else if (st.state == STATE_WAITING_FOR_PRODUCT) {
-            snprintf(line, sizeof(line), "Place product inside");
+            snprintf(line, sizeof(line), "User tag = cancel");
         } else if (st.state == STATE_UV_DONE) {
-            snprintf(line, sizeof(line), "Cycle complete");
+            snprintf(line, sizeof(line), "Scan user when done");
         } else {
             snprintf(line, sizeof(line), " ");
         }
@@ -116,8 +116,7 @@ static void lcdTask(void* param) {
             snprintf(line, sizeof(line), "UV lamp ON %lus",
                      (unsigned long)st.uvTimeRemainingSec);
         } else if (st.state == STATE_DOOR_ENTRY) {
-            snprintf(line, sizeof(line), "Door closing %lus",
-                     (unsigned long)timeoutSec(st));
+            snprintf(line, sizeof(line), "2x user = cancel");
         } else if (st.state == STATE_UV_DONE) {
             snprintf(line, sizeof(line), "Exit closes %lus",
                      (unsigned long)timeoutSec(st));

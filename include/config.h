@@ -73,6 +73,7 @@
 // -----------------------------------------------------------------------------
 #define ENTRY_TIMEOUT_MS        10000
 #define EXIT_TIMEOUT_MS         30000
+#define WAITING_TIMEOUT_MS      900000  // 15 min – auto-cancel if no product scanned
 #define ENROLLMENT_TIMEOUT_MS   15000
 #define LONG_PRESS_DURATION_MS  5000
 #define BOOT_DEBOUNCE_MS        50
