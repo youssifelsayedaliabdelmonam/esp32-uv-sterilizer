@@ -76,17 +76,31 @@ static void publishStatus() {
 }
 
 // Caller must hold statusMutex
+static void clearCycleSession() {
+    currentStatus.lastUserUid[0] = '\0';
+    currentStatus.lastProductUid[0] = '\0';
+    currentStatus.lastUserName[0] = '\0';
+    currentStatus.lastProductName[0] = '\0';
+}
+
+// Caller must hold statusMutex
 static void transitionTo(SystemState newState) {
+    SystemState fromState = currentStatus.state;
     currentStatus.state = newState;
     stateEnterMs = millis();
-    Serial.printf("[State] -> %s\n", systemStateName(newState));
+    Serial.printf("[State] %s -> %s\n", systemStateName(fromState), systemStateName(newState));
 
     switch (newState) {
         case STATE_IDLE:
             lockBothDoors();
             setUvLamp(false);
+            clearCycleSession();
             currentStatus.stateTimeoutRemainingMs = 0;
             currentStatus.uvTimeRemainingSec = 0;
+            if (fromState == STATE_UV_DONE) {
+                buzzerRequest(BEEP_SINGLE_SHORT);
+                Serial.println("[State] Ready for next entry – scan user tag at entrance");
+            }
             break;
 
         case STATE_DOOR_ENTRY:
@@ -181,6 +195,8 @@ static void handleTagEvent(const TagEvent& evt) {
             break;
 
         case STATE_UV_ACTIVE:
+            break;
+
         case STATE_UV_DONE:
             break;
     }

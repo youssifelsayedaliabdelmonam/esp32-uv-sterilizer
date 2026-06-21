@@ -2,6 +2,8 @@
 #include "config.h"
 #include "storage.h"
 #include "state_machine.h"
+#include "web_server.h"
+#include "buzzer.h"
 #include <SPI.h>
 
 // Slow SPI clock for reliable dual-MFRC522 on ESP32 (must precede MFRC522 include)
@@ -179,14 +181,12 @@ static void rfidTask(void* param) {
     (void)param;
     char uid[24];
     TagEvent evt;
-    bool gotTag = false;
 
     // Run first health check immediately (don't wait 3 s after boot)
     lastHealthCheckMs = 0;
     runPeriodicHealthCheck();
 
     for (;;) {
-        gotTag = false;
         memset(&evt, 0, sizeof(evt));
 
         bool enrolling = false;
@@ -203,13 +203,15 @@ static void rfidTask(void* param) {
         }
 
         if (enrolling) {
+            bool gotEnrollTag = false;
             if (entranceHealthy && readTagFromReader(rfidEntrance, uid, sizeof(uid))) {
                 strncpy(evt.uid, uid, sizeof(evt.uid) - 1);
-                gotTag = true;
+                evt.uid[sizeof(evt.uid) - 1] = '\0';
+                gotEnrollTag = true;
             }
             unlockSpi();
 
-            if (gotTag && xSemaphoreTake(enrollMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            if (gotEnrollTag && xSemaphoreTake(enrollMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
                 strncpy(enrollmentUid, evt.uid, sizeof(enrollmentUid) - 1);
                 enrollmentUid[sizeof(enrollmentUid) - 1] = '\0';
                 enrollmentDone = true;
@@ -222,29 +224,43 @@ static void rfidTask(void* param) {
         }
 
         SystemState state = stateMachineGetState();
-        bool pollEntrance = (state == STATE_IDLE || state == STATE_DOOR_ENTRY);
+        bool pollEntranceCycle = (state == STATE_IDLE || state == STATE_DOOR_ENTRY);
         bool pollInside = (state == STATE_WAITING_FOR_PRODUCT);
+        bool gotEntranceTag = false;
 
-        if (pollEntrance && entranceHealthy) {
-            if (readTagFromReader(rfidEntrance, uid, sizeof(uid))) {
-                strncpy(evt.uid, uid, sizeof(evt.uid) - 1);
-                evt.source = TAG_SOURCE_ENTRANCE;
-                gotTag = true;
-            }
-        } else if (pollInside && insideHealthy) {
-            if (readTagFromReader(rfidInside, uid, sizeof(uid))) {
-                strncpy(evt.uid, uid, sizeof(evt.uid) - 1);
-                evt.source = TAG_SOURCE_INSIDE;
-                gotTag = true;
+        if (entranceHealthy && readTagFromReader(rfidEntrance, uid, sizeof(uid))) {
+            strncpy(evt.uid, uid, sizeof(evt.uid) - 1);
+            evt.uid[sizeof(evt.uid) - 1] = '\0';
+            evt.source = TAG_SOURCE_ENTRANCE;
+            gotEntranceTag = true;
+
+            if (storage.isAdminTag(String(evt.uid))) {
+                unlockSpi();
+                webServerToggle();
+                buzzerRequest(BEEP_DOUBLE_SHORT);
+                Serial.printf("[RFID] Admin tag scanned – web UI toggled\n");
+                vTaskDelay(pdMS_TO_TICKS(RFID_POLL_INTERVAL_MS));
+                continue;
             }
         }
 
-        unlockSpi();
-
-        // SPIFFS lookups outside SPI mutex
-        if (gotTag) {
+        if (gotEntranceTag && pollEntranceCycle) {
             classifyTag(evt);
+            unlockSpi();
             xQueueSend(tagEventQueue, &evt, 0);
+        } else if (pollInside && insideHealthy) {
+            if (readTagFromReader(rfidInside, uid, sizeof(uid))) {
+                strncpy(evt.uid, uid, sizeof(evt.uid) - 1);
+                evt.uid[sizeof(evt.uid) - 1] = '\0';
+                evt.source = TAG_SOURCE_INSIDE;
+                classifyTag(evt);
+                unlockSpi();
+                xQueueSend(tagEventQueue, &evt, 0);
+            } else {
+                unlockSpi();
+            }
+        } else {
+            unlockSpi();
         }
 
         vTaskDelay(pdMS_TO_TICKS(RFID_POLL_INTERVAL_MS));

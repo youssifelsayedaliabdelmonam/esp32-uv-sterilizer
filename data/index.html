@@ -118,6 +118,23 @@ input[type="text"], input[type="number"], input[type="datetime-local"] {
 </div>
 
 <div class="card">
+  <h2>Admin NFC Tag</h2>
+  <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem">
+    Scan this tag at the <strong>entrance</strong> reader to toggle admin WiFi (same as holding BOOT 5 seconds).
+    Set it here while the admin page is open via BOOT.
+  </p>
+  <div class="stat" style="margin-bottom:0.75rem">
+    <label>Registered admin tag</label>
+    <span id="adminTagUid">(not set)</span>
+  </div>
+  <div class="row">
+    <button onclick="scanAdminTag()">Scan &amp; Set Admin Tag</button>
+    <button class="danger" onclick="clearAdminTag()">Clear Admin Tag</button>
+  </div>
+  <p class="msg" id="adminTagMsg"></p>
+</div>
+
+<div class="card">
   <h2>Date &amp; Time</h2>
   <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem">
     Set the clock for log timestamps. Time is stored as entered (wall clock).
@@ -183,7 +200,7 @@ input[type="text"], input[type="number"], input[type="datetime-local"] {
 <div class="card">
   <h2>Factory Reset</h2>
   <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem">
-    Clears all user tags, product tags, and sterilization logs. UV duration and clock are kept.
+    Clears all user tags, product tags, and sterilization logs. UV duration, clock, and admin NFC tag are kept.
   </p>
   <div class="row">
     <button class="danger" onclick="factoryReset()">Factory Reset Data</button>
@@ -263,6 +280,8 @@ async function refreshStatus() {
     }
     document.getElementById('stopApBtn').style.display =
       s.web_server_active ? 'inline-block' : 'none';
+    document.getElementById('adminTagUid').textContent =
+      s.admin_tag_set ? s.admin_tag_uid : '(not set)';
   } catch (e) {
     setMsg('statusMsg', e.message, false);
   }
@@ -273,7 +292,29 @@ async function stopAp() {
   try {
     await api('/api/ap/stop', { method: 'POST' });
   } catch (e) { /* connection may drop */ }
-  alert('Admin WiFi stopped. Hold BOOT button 5 seconds to enable again.');
+  alert('Admin WiFi stopped. Hold BOOT 5s or scan admin NFC tag to enable again.');
+}
+
+async function scanAdminTag() {
+  setMsg('adminTagMsg', 'Hold tag near ENTRANCE reader (15s timeout)...', true);
+  try {
+    const data = await api('/api/scan_tag?type=admin');
+    setMsg('adminTagMsg', 'Admin tag set: ' + data.uid, true);
+    refreshStatus();
+  } catch (e) {
+    setMsg('adminTagMsg', e.message, false);
+  }
+}
+
+async function clearAdminTag() {
+  if (!confirm('Remove admin NFC tag? WiFi can still be toggled with BOOT button.')) return;
+  try {
+    await api('/api/admin_tag', { method: 'DELETE' });
+    setMsg('adminTagMsg', 'Admin tag cleared', true);
+    refreshStatus();
+  } catch (e) {
+    setMsg('adminTagMsg', e.message, false);
+  }
 }
 
 async function loadTime() {

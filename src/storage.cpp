@@ -281,6 +281,34 @@ bool Storage::setUvDurationSec(uint32_t seconds) {
     return true;
 }
 
+String Storage::getAdminTag() {
+    return prefs.getString(NVS_KEY_ADMIN_TAG, "");
+}
+
+bool Storage::hasAdminTag() {
+    return getAdminTag().length() > 0;
+}
+
+bool Storage::setAdminTag(const String& uid) {
+    if (uid.length() == 0) return false;
+    prefs.putString(NVS_KEY_ADMIN_TAG, uid);
+    Serial.printf("[Storage] Admin tag set: %s\n", uid.c_str());
+    return true;
+}
+
+bool Storage::clearAdminTag() {
+    if (!prefs.isKey(NVS_KEY_ADMIN_TAG)) return true;
+    prefs.remove(NVS_KEY_ADMIN_TAG);
+    Serial.println("[Storage] Admin tag cleared");
+    return true;
+}
+
+bool Storage::isAdminTag(const String& uid) {
+    String admin = getAdminTag();
+    if (admin.length() == 0) return false;
+    return uid.equalsIgnoreCase(admin);
+}
+
 // -----------------------------------------------------------------------------
 // System time
 // -----------------------------------------------------------------------------

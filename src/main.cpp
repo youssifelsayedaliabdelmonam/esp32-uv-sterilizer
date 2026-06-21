@@ -2,7 +2,7 @@
  * UV Sterilization Room Controller – ESP32
  *
  * Main entry: initializes hardware, storage, and FreeRTOS tasks.
- * Boot button long-press toggles the WiFi admin web server.
+ * Boot button long-press or admin NFC tag toggles the WiFi admin web server.
  */
 
 #include <Arduino.h>

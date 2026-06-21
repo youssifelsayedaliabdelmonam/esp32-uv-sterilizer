@@ -65,6 +65,13 @@ public:
     uint32_t getUvDurationSec();
     bool setUvDurationSec(uint32_t seconds);
 
+    // Admin NFC tag (NVS) – scan at entrance toggles admin WiFi
+    String getAdminTag();
+    bool hasAdminTag();
+    bool setAdminTag(const String& uid);
+    bool clearAdminTag();
+    bool isAdminTag(const String& uid);
+
     // Cycle logging (thread-safe via queue + mutex)
     bool queueCycleLog(const char* userUid, const char* productUid);
     void processLogQueue();

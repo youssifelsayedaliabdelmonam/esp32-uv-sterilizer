@@ -71,6 +71,8 @@ static void handleStatus() {
     doc["entrance_rfid_version"] = rfidEntranceVersion();
     doc["inside_rfid_version"] = rfidInsideVersion();
     doc["uv_duration_sec"] = storage.getUvDurationSec();
+    doc["admin_tag_set"] = storage.hasAdminTag();
+    doc["admin_tag_uid"] = storage.getAdminTag();
     String out;
     serializeJson(doc, out);
     sendJson(200, out);
@@ -240,15 +242,17 @@ static void handleDeleteProduct() {
 
 static void handleScanTag() {
     if (!server.hasArg("type")) {
-        sendError(400, "type query param required (user|product)");
+        sendError(400, "type query param required (user|product|admin)");
         return;
     }
     String type = server.arg("type");
     EnrollType et = ENROLL_USER;
     if (type.equalsIgnoreCase("product")) {
         et = ENROLL_PRODUCT;
+    } else if (type.equalsIgnoreCase("admin")) {
+        et = ENROLL_ADMIN;
     } else if (!type.equalsIgnoreCase("user")) {
-        sendError(400, "type must be user or product");
+        sendError(400, "type must be user, product, or admin");
         return;
     }
 
@@ -263,6 +267,21 @@ static void handleScanTag() {
 
     if (ok) {
         String uidStr(uid);
+
+        if (et == ENROLL_ADMIN) {
+            if (!storage.setAdminTag(uidStr)) {
+                sendError(500, "Failed to save admin tag");
+                return;
+            }
+            StaticJsonDocument<192> doc;
+            doc["uid"] = uid;
+            doc["success"] = true;
+            String out;
+            serializeJson(doc, out);
+            sendJson(200, out);
+            return;
+        }
+
         StorageTagType stype = (et == ENROLL_PRODUCT) ? STORAGE_TAG_PRODUCT : STORAGE_TAG_USER;
         TagConflictType conflict = storage.checkTagConflict(uidStr, stype);
         if (conflict == TAG_CONFLICT_IS_PRODUCT) {
@@ -413,6 +432,24 @@ static void handleFactoryReset() {
     sendJson(200, "{\"success\":true,\"message\":\"Users, products, and logs cleared\"}");
 }
 
+static void handleGetAdminTag() {
+    StaticJsonDocument<192> doc;
+    String uid = storage.getAdminTag();
+    doc["set"] = uid.length() > 0;
+    doc["uid"] = uid;
+    String out;
+    serializeJson(doc, out);
+    sendJson(200, out);
+}
+
+static void handleDeleteAdminTag() {
+    if (!storage.clearAdminTag()) {
+        sendError(500, "Failed to clear admin tag");
+        return;
+    }
+    sendJson(200, "{\"success\":true}");
+}
+
 static void handleNotFound() {
     sendError(404, "Not found");
 }
@@ -462,6 +499,8 @@ static void setupRoutes() {
     server.on("/api/ap/stop", HTTP_POST, handleApStop);
     server.on("/api/factory_reset", HTTP_POST, handleFactoryReset);
     server.on("/api/settings", HTTP_POST, handlePostSettings);
+    server.on("/api/admin_tag", HTTP_GET, handleGetAdminTag);
+    server.on("/api/admin_tag", HTTP_DELETE, handleDeleteAdminTag);
     server.onNotFound(handleNotFound);
 }
 

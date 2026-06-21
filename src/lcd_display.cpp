@@ -124,7 +124,7 @@ static void lcdTask(void* param) {
         } else if (st.webServerActive) {
             snprintf(line, sizeof(line), "Web server ON");
         } else {
-            snprintf(line, sizeof(line), "BOOT 5s = admin");
+            snprintf(line, sizeof(line), "BOOT/NFC=admin");
         }
         padLine(line, LCD_COLS + 1);
         lcd.setCursor(0, 3);

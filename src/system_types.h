@@ -56,7 +56,8 @@ enum WebServerCmd : uint8_t {
 // Enrollment request type
 enum EnrollType : uint8_t {
     ENROLL_USER = 0,
-    ENROLL_PRODUCT
+    ENROLL_PRODUCT,
+    ENROLL_ADMIN
 };
 
 // Shared system status (mutex-protected for LCD / web API)

@@ -133,6 +133,7 @@
 #define NVS_NAMESPACE           "uvsteril"
 #define NVS_KEY_UV_DURATION     "uv_duration"
 #define NVS_KEY_LAST_TIME       "last_time"   // optional: restore clock after reboot
+#define NVS_KEY_ADMIN_TAG       "admin_tag"   // NFC tag UID to toggle admin WiFi
 
 // -----------------------------------------------------------------------------
 // FreeRTOS Task Configuration
