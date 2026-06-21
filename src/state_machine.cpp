@@ -47,8 +47,9 @@ static void lockBothDoors() {
     setExitLock(true);
 }
 
-static void unlockBothDoors() {
-    setEntranceLock(false);
+// Exit door only – entrance stays locked (UV_DONE / post-cycle exit)
+static void openExitDoorOnly() {
+    setEntranceLock(true);
     setExitLock(false);
 }
 
@@ -111,7 +112,7 @@ static void transitionTo(SystemState newState) {
         }
 
         case STATE_UV_DONE:
-            unlockBothDoors();
+            openExitDoorOnly();
             setUvLamp(false);
             currentStatus.stateTimeoutRemainingMs = EXIT_TIMEOUT_MS;
             buzzerRequest(BEEP_DOUBLE_SHORT);
@@ -199,7 +200,7 @@ static void updateTimeouts() {
             break;
 
         case STATE_UV_ACTIVE:
-            if (now >= uvEndMs) {
+            if ((int32_t)(now - uvEndMs) >= 0) {
                 transitionTo(STATE_UV_DONE);
             } else {
                 currentStatus.uvTimeRemainingSec = (uvEndMs - now + 999) / 1000;

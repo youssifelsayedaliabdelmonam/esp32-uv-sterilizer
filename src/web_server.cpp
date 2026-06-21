@@ -402,7 +402,7 @@ static void handleFactoryReset() {
         sendError(400, "Invalid JSON");
         return;
     }
-    if (!doc["confirm"] | false) {
+    if (!(doc["confirm"] | false)) {
         sendError(400, "confirm:true required");
         return;
     }
