@@ -56,7 +56,12 @@ static void lcdTask(void* param) {
         // Line 1: state + countdown
         switch (st.state) {
             case STATE_IDLE:
-                snprintf(line, sizeof(line), "System Ready");
+                if (!st.entranceLocked && st.exitLocked) {
+                    snprintf(line, sizeof(line), "Exit: %lus open",
+                             (unsigned long)timeoutSec(st));
+                } else {
+                    snprintf(line, sizeof(line), "System Ready");
+                }
                 break;
             case STATE_DOOR_ENTRY:
                 snprintf(line, sizeof(line), "Entry: %lus open",
@@ -104,7 +109,7 @@ static void lcdTask(void* param) {
         if (prod) {
             snprintf(line, sizeof(line), "Prod: %.13s", prod);
         } else if (st.state == STATE_WAITING_FOR_PRODUCT) {
-            snprintf(line, sizeof(line), "User tag = cancel");
+            snprintf(line, sizeof(line), "User tag=cancel");
         } else if (st.state == STATE_UV_DONE) {
             snprintf(line, sizeof(line), "Scan user when done");
         } else {

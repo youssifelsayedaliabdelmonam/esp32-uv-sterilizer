@@ -226,7 +226,7 @@ static void rfidTask(void* param) {
         SystemState state = stateMachineGetState();
         bool pollEntranceCycle = (state == STATE_IDLE || state == STATE_DOOR_ENTRY);
         bool pollEntranceUserAbort = (state == STATE_WAITING_FOR_PRODUCT || state == STATE_UV_DONE);
-        bool pollInside = (state == STATE_WAITING_FOR_PRODUCT);
+        bool pollInside = (state == STATE_WAITING_FOR_PRODUCT || state == STATE_UV_DONE);
         bool gotEntranceTag = false;
 
         if (entranceHealthy && readTagFromReader(rfidEntrance, uid, sizeof(uid))) {
@@ -265,8 +265,18 @@ static void rfidTask(void* param) {
                 evt.uid[sizeof(evt.uid) - 1] = '\0';
                 evt.source = TAG_SOURCE_INSIDE;
                 classifyTag(evt);
+                bool sendToStateMachine = false;
+                if (state == STATE_WAITING_FOR_PRODUCT && (evt.isUser || evt.isProduct)) {
+                    sendToStateMachine = true;
+                } else if (state == STATE_UV_DONE && evt.isUser) {
+                    sendToStateMachine = true;
+                } else {
+                    buzzerRequest(BEEP_ERROR);
+                }
                 unlockSpi();
-                xQueueSend(tagEventQueue, &evt, 0);
+                if (sendToStateMachine) {
+                    xQueueSend(tagEventQueue, &evt, 0);
+                }
             } else {
                 unlockSpi();
             }

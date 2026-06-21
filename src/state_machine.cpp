@@ -11,6 +11,7 @@ static uint32_t stateEnterMs = 0;
 static uint32_t uvEndMs = 0;
 static char doorEntryLastUid[24] = {};
 static uint32_t doorEntryLastScanMs = 0;
+static bool idleExitAssist = false;  // IDLE with entrance open so user can leave room
 
 static bool lockStatus(TickType_t timeout = pdMS_TO_TICKS(50)) {
     return statusMutex && xSemaphoreTake(statusMutex, timeout) == pdTRUE;
@@ -104,6 +105,7 @@ static void transitionTo(SystemState newState) {
                 Serial.println("[State] Ready for next entry – scan user tag at entrance");
             }
             doorEntryLastUid[0] = '\0';
+            idleExitAssist = false;
             break;
 
         case STATE_DOOR_ENTRY:
@@ -164,11 +166,23 @@ static void setLastProduct(const char* uid) {
     currentStatus.lastProductName[sizeof(currentStatus.lastProductName) - 1] = '\0';
 }
 
+// Caller must hold statusMutex – cancel cycle and open entrance so an occupant can exit
+static void cancelCycleToIdle(const char* reason) {
+    transitionTo(STATE_IDLE);
+    idleExitAssist = true;
+    setEntranceLock(false);
+    setExitLock(true);
+    stateEnterMs = millis();
+    currentStatus.stateTimeoutRemainingMs = ENTRY_TIMEOUT_MS;
+    Serial.printf("[State] %s – entrance open to exit\n", reason);
+}
+
 // Caller must hold statusMutex
 static void handleTagEvent(const TagEvent& evt) {
     switch (currentStatus.state) {
         case STATE_IDLE:
             if (evt.source == TAG_SOURCE_ENTRANCE && evt.isUser) {
+                idleExitAssist = false;
                 setLastUser(evt.uid);
                 transitionTo(STATE_DOOR_ENTRY);
             } else if (evt.source == TAG_SOURCE_ENTRANCE) {
@@ -202,9 +216,9 @@ static void handleTagEvent(const TagEvent& evt) {
             break;
 
         case STATE_WAITING_FOR_PRODUCT:
-            if (evt.source == TAG_SOURCE_ENTRANCE && evt.isUser) {
-                transitionTo(STATE_IDLE);
-                Serial.println("[State] Cycle cancelled – no product scanned");
+            if (evt.isUser &&
+                (evt.source == TAG_SOURCE_ENTRANCE || evt.source == TAG_SOURCE_INSIDE)) {
+                cancelCycleToIdle("Cycle cancelled");
             } else if (evt.source == TAG_SOURCE_INSIDE && evt.isProduct) {
                 setLastProduct(evt.uid);
                 transitionTo(STATE_UV_ACTIVE);
@@ -217,9 +231,9 @@ static void handleTagEvent(const TagEvent& evt) {
             break;
 
         case STATE_UV_DONE:
-            if (evt.source == TAG_SOURCE_ENTRANCE && evt.isUser) {
-                transitionTo(STATE_IDLE);
-                Serial.println("[State] Exit complete – returning to idle");
+            if (evt.isUser &&
+                (evt.source == TAG_SOURCE_ENTRANCE || evt.source == TAG_SOURCE_INSIDE)) {
+                cancelCycleToIdle("Exit complete");
             }
             break;
     }
@@ -241,8 +255,7 @@ static void updateTimeouts() {
         case STATE_WAITING_FOR_PRODUCT:
             if (PRODUCT_WAIT_TIMEOUT_MS > 0) {
                 if ((int32_t)(now - stateEnterMs) >= (int32_t)PRODUCT_WAIT_TIMEOUT_MS) {
-                    transitionTo(STATE_IDLE);
-                    Serial.println("[State] Product wait timeout – returning to idle");
+                    cancelCycleToIdle("Product wait timeout");
                 } else {
                     currentStatus.stateTimeoutRemainingMs =
                         PRODUCT_WAIT_TIMEOUT_MS - (now - stateEnterMs);
@@ -264,6 +277,20 @@ static void updateTimeouts() {
                 Serial.println("[State] Exit window ended – returning to idle");
             } else {
                 currentStatus.stateTimeoutRemainingMs = EXIT_TIMEOUT_MS - (now - stateEnterMs);
+            }
+            break;
+
+        case STATE_IDLE:
+            if (idleExitAssist) {
+                if ((int32_t)(now - stateEnterMs) >= (int32_t)ENTRY_TIMEOUT_MS) {
+                    idleExitAssist = false;
+                    setEntranceLock(true);
+                    currentStatus.stateTimeoutRemainingMs = 0;
+                    Serial.println("[State] Exit assist ended – fully idle");
+                } else {
+                    currentStatus.stateTimeoutRemainingMs =
+                        ENTRY_TIMEOUT_MS - (now - stateEnterMs);
+                }
             }
             break;
 
